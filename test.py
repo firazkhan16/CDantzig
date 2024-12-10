@@ -1,97 +1,195 @@
-###
 import pandas as pd
 import numpy as np
+from docplex.mp.model import Model
 
-# Load the datasets
-page_view_matrix = pd.read_csv(r"walkthrough/Page_View_Matrix_Example.csv", header=0, index_col=0)
-site_info = pd.read_csv(r"walkthrough/500_Site_Info_Example.csv", header=0)
+def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
+    """
+    Compute lambda_max and a scaling factor for the given CDE problem setup.
 
-# Extract necessary columns
-cost = site_info['Cost']  # Cost per impression (CPM)
-traffic = site_info['Pages']  # Total website visits (traffic)
-clickthrough = site_info['Clickthrough']  # CTR
+    Parameters:
+    - sigma: Covariance matrix (p x p)
+    - eta: Mean vector of dimension p
+    - A: Constraint matrix (k x p)
+    - b: Constraint vector (k x 1)
+    - p: Dimension of w (beta)
+    - k: Dimension of gamma
+    - factor: A scaling factor (default 1.0)
 
-# Calculate gamma (efficiency metric for reach)
-gamma = 1 / (cost * traffic)
+    Returns:
+    - lambda_max: The smallest feasible lambda that satisfies the constraints.
+    - new_factor: A scaling factor so that lambda_max * new_factor = 1.
+                  If lambda_max = 0, returns the original factor.
+    """
 
-# Replace NaN values in page view matrix with 0
-page_view_matrix.fillna(0, inplace=True)
+    # PHASE 1: Solve lp1 to find minimal L1 norm solution satisfying A w = b
+    model = Model('lp1')
+    model.parameters.read.scale = -1
+    model.parameters.lpmethod = 4
 
-# Normalize gamma to ensure it sums to 1 (optional, for proportional allocation)
-gamma_normalized = gamma / gamma.sum()
+    # Define w variables
+    w = np.array(model.continuous_var_list(p, lb=-model.infinity, name='w'))
 
-# Initialize variables for budget steps
-num_steps = 251
-step_size = 0.02  # Incremental budget steps
-budgets = np.arange(0, num_steps * step_size, step_size)  # Budget levels
-reach_elmso = []
+    # Objective: minimize sum of abs(w[i])
+    # model.abs() is a docplex feature that linearizes absolute values internally.
+    model.minimize(model.sum(model.abs(w[i]) for i in range(p)))
 
-# Compute reach for each budget step
-for budget in budgets:
-    # Allocate budget proportional to gamma
-    allocation = gamma_normalized * budget  # Budget allocation for each website
+    # Add linear equality constraints A w = b
+    for i in range(k):
+        expr = model.dot(w, A[i])
+        model.add_constraint(expr == b[i])
 
-    # Compute reach: Fraction of users exposed at least once
-    exposure = page_view_matrix.values @ allocation.values  # Total exposure per user
-    reach = (exposure > 0).mean()  # Fraction of users reached
-    reach_elmso.append(reach)
+    # Solve lp1
+    solution = model.solve()
+    if solution is None or model.solve_status.value != 2:
+        model.clear()
+        raise Exception('Infeasible lp1: Could not find a feasible solution to the baseline problem.')
 
-# Convert results to a DataFrame
-results = pd.DataFrame({
-    "Budget": budgets,
-    "Reach": reach_elmso
-})
+    lp1_norm = solution.get_objective_value()
+    model.clear()
 
-# Display results
-print(results)
+    # PHASE 2: Solve lp2 to find minimal lambda
+    model = Model('lp2')
+    model.parameters.read.scale = -1
+    model.parameters.lpmethod = 4
 
-# Optional: Plot the results
-import matplotlib.pyplot as plt
+    w = np.array(model.continuous_var_list(p, lb=-model.infinity, name='w'))
+    gamma = np.array(model.continuous_var_list(k, lb=-model.infinity, name='gamma'))
+    _lambda_scaled = model.continuous_var(name='lambda')
 
-plt.plot(results["Budget"], results["Reach"], label="Reach (ELMSO)", color="blue")
-plt.xlabel("Budget (in millions)")
-plt.ylabel("Reach")
-plt.title("Reach vs. Budget (ELMSO)")
-plt.legend()
-plt.show()
-###
+    # Minimize lambda
+    model.minimize(_lambda_scaled)
+
+    # Infinity norm constraints:
+    # For each i in [0, p-1], we have:
+    # -_lambda_scaled <= factor*(sigma[i]*w - eta[i] + (A.T[i]*gamma)) <= _lambda_scaled
+    # which we split into two constraints each.
+    for i in range(p):
+        expr = factor * (model.dot(w, sigma.iloc[i,:]) - eta[i] + model.dot(gamma, A.T[i])) - _lambda_scaled
+        model.add_constraint(expr <= 0)
+
+        expr = factor * (model.dot(w, sigma.iloc[i,:]) - eta[i] + model.dot(gamma, A.T[i])) + _lambda_scaled
+        model.add_constraint(expr >= 0)
+
+    # A w = b constraints again
+    for i in range(k):
+        expr = model.dot(w, A[i])
+        model.add_constraint(expr == b[i])
+
+    # Enforce the same L1 norm as lp1_norm
+    expr = model.sum(model.abs(w[i]) for i in range(p))
+    model.add_constraint(expr == lp1_norm)
+
+    # Solve lp2
+    solution = model.solve()
+    if solution is None or model.solve_status.value != 2:
+        model.clear()
+        raise Exception('Infeasible lp2: Could not find a feasible lambda.')
+
+    lambda_max = solution.get_value(_lambda_scaled)
+    if lambda_max != 0:
+        new_factor = factor / lambda_max
+    else:
+        new_factor = factor
+
+    model.clear()
+    return lambda_max, new_factor
 
 
-import pandas as pd
-import numpy as np
-from sklearn.linear_model import Lasso
-from sklearn.preprocessing import StandardScaler
+def CDE_DOcplex(sigma, eta, A, b, p, k, factor, _lambda_scaled):
+    """
+    Compute minimum beta subject to linear constraints.
 
-# Load synthetic dataset
-page_view_matrix = pd.read_csv(r"walkthrough/Page_View_Matrix_Example.csv", header=0, index_col=0)
-site_info = pd.read_csv(r"walkthrough/500_Site_Info_Example.csv", header=0)
+    Parameters:
+    - sigma: Covariance matrix (p x p)
+    - eta: Mean vector of dimension p
+    - A: Constraint matrix (k x p)
+    - b: Constraint vector (k x 1)
+    - p: Dimension of w (beta)
+    - k: Dimension of gamma
+    - factor: A scaling factor (default 1.0)
+    - _lambda_scaled: tuning parameter
 
-# Feature matrix (X) and target vector (y)
-X = page_view_matrix.values  # Rows: Users, Columns: Websites
-y = np.ones(X.shape[0])  # Equal allocation baseline
+    Returns:
+    - w: the set of optimised weights
+    """
 
-# Standardize features
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
+    model = Model(name='CDE')
 
-# Configure and fit Lasso
-lasso = Lasso(alpha=5.0, positive=True, tol=0.1, max_iter=100000)
-lasso.fit(X_scaled, y)
+    # From Dechuan's reference code
+    model.parameters.read.scale = -1
+    model.parameters.lpmethod = 4
 
-# Extract coefficients
-coefficients = lasso.coef_
+    # Define variables similar to reference code: w and gamma
+    w = np.array(model.continuous_var_list([f'w{i}' for i in range(p)], lb=-model.infinity))
+    gamma = np.array(model.continuous_var_list([f'gamma{i}' for i in range(k)], lb=-model.infinity))
 
-# Normalize coefficients to represent proportional budget allocation
-beta_normalized = coefficients / np.sum(coefficients)
+    # Objective: minimize the L1 norm of w using model.abs()
+    expr = model.sum(model.abs(w[i]) for i in range(p))
+    model.minimize(expr)
 
-# Identify selected websites (non-zero coefficients)
-non_zero_coefficients = (coefficients != 0).sum()
-selected_websites = site_info.loc[coefficients != 0, ['Site_Name', 'Cost', 'Pages', 'Clickthrough']]
+    # Infinity norm constraints:
+    for row in range(p):
+        expr = factor * (model.dot(w, sigma.values[row]) - eta[row] + model.dot(gamma, A.T[row])) - _lambda_scaled
+        model.add_constraint(expr <= 0)
 
-# Display results
-print("Converged Lasso Regression")
-print(f"Number of Non-Zero Coefficients: {non_zero_coefficients}")
-print("Normalized Coefficients (Proportional Allocation):")
-print(beta_normalized)
-print("\nSelected Websites for Budget Allocation:")
-print(selected_websites)
+        expr = factor * (model.dot(w, sigma.values[row]) - eta[row] + model.dot(gamma, A.T[row])) + _lambda_scaled
+        model.add_constraint(expr >= 0)
+
+    # Equality constraints A beta = b
+    for i in range(k):
+        expr = model.dot(w, A[i])
+        model.add_constraint(expr == b[i])
+
+    # Not needed if A is set to row vector of ones
+    # model.add_constraint(model.sum(w[i] for i in range(p)) == 1)
+
+    solution = model.solve()
+    if model.solve_status.value == 2:
+        optimised_w = np.array(solution.get_values(w))
+        model.clear()
+        return optimised_w
+    else:
+        model.clear()
+        return 'Error converging to a solution'
+
+
+if __name__ == '__main__':
+
+    page_view_matrix = pd.read_csv(r"walkthrough/Page_View_Matrix_Example.csv", header=0, index_col=0)
+    site_info = pd.read_csv(r"walkthrough/500_Site_Info_Example.csv", header=0)
+
+    sigma = page_view_matrix.cov(ddof=1)
+    eta = page_view_matrix.mean().values
+
+    p = 500
+    k = 1
+    factor = 1.0
+    lambda_value = 0.1
+
+    result_dic = {}
+    portfolio_dic = {}
+    lambda_list = [i / 20 for i in range(19, 0, -1)]
+    for _lambda in lambda_list:
+        portfolio_dic[_lambda] = []
+
+    A = np.ones((1, p))  # A is a 1x500 matrix, all entries are 1
+    b = np.array([1.0])  # b is a 1-dimensional vector with the value 1
+
+    lambda_max, original_factor = find_lambda_max_cplex(sigma, eta, A, b, p, k, factor)
+    if lambda_max<=0:
+        raise Exception('Lambda_max=0!')
+
+    return_list = np.empty(len(lambda_list))
+    for index, _lambda in enumerate(lambda_list):
+        print(f'Optimizing {index}:{_lambda}')
+        w = CDE_DOcplex(sigma, eta, A, b, p, k, original_factor, _lambda)
+
+        portfolio_dic[_lambda].append(w)
+        # return_list[index] = data.iloc[-1].values @ w
+
+    result = pd.DataFrame.from_dict(result_dic)
+    result.index = lambda_list
+    portfolios = pd.DataFrame.from_dict(portfolio_dic, orient='index')
+    portfolios.to_csv(
+        f'website_results.csv'
+    )
