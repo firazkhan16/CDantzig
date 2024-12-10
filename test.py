@@ -152,8 +152,34 @@ def CDE_DOcplex(sigma, eta, A, b, p, k, factor, _lambda_scaled):
         model.clear()
         return 'Error converging to a solution'
 
+def constrained_lasso(X, eta, A, b, p, k, lambda_value):
+    model = Model('constrained_lasso')
+
+    w = model.continuous_var_list(p, name='w', lb=-model.infinity)
+    n = len(eta)
+
+    residual = [model.dot(w, X.values[i]) - eta[i] for i in range(n)]
+
+    quad_obj = model.sum(residual[i]*residual[i] for i in range(n)) * 0.5
+
+    l1_penalty = lambda_value * model.sum(model.abs(w[i]) for i in range(p))
+
+    model.minimize(quad_obj + l1_penalty)
+
+    for i in range(k):
+        model.add_constraint(model.dot(w, A[i]) == b[i])
+
+    solution = model.solve()
+    if solution is not None:
+        w_values = [solution.get_value(var) for var in w]
+        model.clear()
+        return np.array(w_values)
+    else:
+        model.clear()
+        return 'Error converging to a solution'
 
 if __name__ == '__main__':
+    # We have yet to consider demographic constraints
     page_view_matrix = pd.read_csv(r"walkthrough/Page_View_Matrix_Example.csv", header=0, index_col=0)
     site_info = pd.read_csv(r"walkthrough/500_Site_Info_Example.csv", header=0)
 
@@ -171,8 +197,8 @@ if __name__ == '__main__':
     for _lambda in lambda_list:
         portfolio_dic[_lambda] = []
 
-    A = np.ones((1, p))  # A is a 1x500 matrix, all entries are 1
-    b = np.array([1.0])  # b is a 1-dimensional vector with the value 1
+    A = np.ones((1, p))  # A represents a row vector of ones so A*beta = b represents sum of beta = b
+    b = np.array([1.0])  # b represents total website budget
 
     lambda_max, original_factor = find_lambda_max_cplex(sigma, eta, A, b, p, k, factor)
     if lambda_max<=0:
@@ -195,4 +221,26 @@ if __name__ == '__main__':
     portfolios.to_csv(
         f'portfolios.csv'
     )
-    print("Done")
+    print("Done with CDE")
+
+    # p = 500
+    # k = 1
+    # A = np.ones((1, p))
+    # b = np.array([1.0])
+    #
+    # X = page_view_matrix.copy()
+    # X_values = X.values
+    #
+    # col_means = X_values.mean(axis=0)
+    # col_stds = X_values.std(axis=0, ddof=1)  # ddof=1 for sample std
+    #
+    # X_normalized = (X_values - col_means) / col_stds
+    # X_normalized_df = pd.DataFrame(X_normalized, index=X.index, columns=X.columns)
+    #
+    # lambda_value = 10
+    # eta_centered = page_view_matrix.sum(axis=1).values
+    #
+    # w = constrained_lasso(page_view_matrix, eta_centered, A, b, p, k, lambda_value)
+    #
+    # print("Done with CLasso")
+
