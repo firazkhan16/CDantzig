@@ -154,12 +154,11 @@ def CDE_DOcplex(sigma, eta, A, b, p, k, factor, _lambda_scaled):
 
 
 if __name__ == '__main__':
-
     page_view_matrix = pd.read_csv(r"walkthrough/Page_View_Matrix_Example.csv", header=0, index_col=0)
     site_info = pd.read_csv(r"walkthrough/500_Site_Info_Example.csv", header=0)
 
-    sigma = page_view_matrix.cov(ddof=1)
-    eta = page_view_matrix.mean().values
+    sigma = page_view_matrix.iloc[:-1,:].cov(ddof=1)
+    eta = page_view_matrix.iloc[:-1,:].mean().values
 
     p = 500
     k = 1
@@ -185,11 +184,15 @@ if __name__ == '__main__':
         w = CDE_DOcplex(sigma, eta, A, b, p, k, original_factor, _lambda)
 
         portfolio_dic[_lambda].append(w)
-        # return_list[index] = data.iloc[-1].values @ w
-
+        return_list[index] = page_view_matrix.iloc[-1].values @ w
+    result_dic[0] = return_list
     result = pd.DataFrame.from_dict(result_dic)
     result.index = lambda_list
+    result.to_csv(
+        f'results.csv'
+    )
     portfolios = pd.DataFrame.from_dict(portfolio_dic, orient='index')
     portfolios.to_csv(
-        f'website_results.csv'
+        f'portfolios.csv'
     )
+    print("Done")
