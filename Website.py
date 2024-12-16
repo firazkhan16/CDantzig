@@ -33,7 +33,6 @@ def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
     w = np.array(model.continuous_var_list(p, lb=-model.infinity, name="w"))
 
     # Objective: minimize sum of abs(w[i])
-    # model.abs() is a docplex feature that linearizes absolute values internally.
     model.minimize(model.sum(model.abs(w[i]) for i in range(p)))
 
     # Add linear equality constraints A w = b
@@ -61,13 +60,8 @@ def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
     gamma = np.array(model.continuous_var_list(k, lb=-model.infinity, name="gamma"))
     _lambda_scaled = model.continuous_var(name="lambda")
 
-    # Minimize lambda
     model.minimize(_lambda_scaled)
 
-    # Infinity norm constraints:
-    # For each i in [0, p-1], we have:
-    # -_lambda_scaled <= factor*(sigma[i]*w - eta[i] + (A.T[i]*gamma)) <= _lambda_scaled
-    # which we split into two constraints each.
     for i in range(p):
         expr = (
             factor
@@ -245,11 +239,8 @@ def compute_reach_and_ctr(page_view_matrix, site_info, beta):
     tau = Y["Pages"].values  # Total website visits (Pages)
     gamma = 1 / (cost_per_thousand * tau)  # Gamma calculation
 
-    # Step 3: Ensure beta aligns with the website order
-    beta = np.array(beta)  # Convert beta to NumPy array (if not already)
-    assert beta.shape[0] == X.shape[1], "Beta size must match number of websites"
+    beta = np.array(beta)
 
-    # Step 4: Compute adjusted probabilities
     beta_gamma = beta * gamma  # Element-wise multiplication of beta and gamma
 
     # Compute the term for Reach: (1 - beta_j * gamma_j) raised to the power of z_ij
@@ -258,14 +249,14 @@ def compute_reach_and_ctr(page_view_matrix, site_info, beta):
     )  # (1 - beta_j * gamma_j) ** z_ij
     adjusted_reach_matrix = np.clip(
         adjusted_reach_matrix, 0, 1
-    )  # Ensure no negative probabilities
+    )  # keep in range [0, 1]
 
-    # Step 5: Compute Reach
+    # Step 5: Compute Reach based on PaC article
     # Product over all websites for each user, then average across users
     reach_per_user = np.prod(adjusted_reach_matrix, axis=1)  # Product across websites
     reach = 1 - np.mean(reach_per_user)  # 1 - probability of no exposure
 
-    # Step 6: Compute CTR
+    # Step 6: Compute CTR based on PaC article
     clickthrough = Y["Clickthrough"].values  # Clickthrough rates (q_j)
     beta_gamma_q = beta * gamma * clickthrough  # Combined beta, gamma, and clickthrough
 
@@ -277,8 +268,7 @@ def compute_reach_and_ctr(page_view_matrix, site_info, beta):
         adjusted_ctr_matrix, 0, 1
     )  # Ensure no negative probabilities
 
-    # Product over all websites for each user, then average across users
-    ctr_per_user = np.prod(adjusted_ctr_matrix, axis=1)  # Product across websites
+    ctr_per_user = np.prod(adjusted_ctr_matrix, axis=1)
     ctr = 1 - np.mean(ctr_per_user)  # 1 - probability of no click
 
     return reach, ctr
@@ -307,7 +297,6 @@ if __name__ == "__main__":
 
     lambda_list = [i / 20 for i in range(19, 8, -1)]
 
-    # Initialize lists to store Reach and CTR results
     reach_cde, ctr_cde = [], []
     reach_classo, ctr_classo = [], []
 
@@ -388,7 +377,6 @@ if __name__ == "__main__":
         subplot_titles=("Reach vs Budget", "Click Rate vs Budget"),
     )
 
-    # Reach Plot
     fig.add_trace(
         go.Scatter(
             x=b_values,
@@ -441,14 +429,12 @@ if __name__ == "__main__":
         title_text="Performance of CDE and CLasso Models", showlegend=True
     )
 
-    # Update axis titles
     fig.update_xaxes(title_text="Budget", row=1, col=1)
     fig.update_yaxes(title_text="Reach", row=1, col=1)
 
     fig.update_xaxes(title_text="Budget", row=1, col=2)
     fig.update_yaxes(title_text="Click Rate", row=1, col=2)
 
-    # Show the plot
     fig.show()
 
     print("Done!")
