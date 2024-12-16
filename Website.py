@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 from docplex.mp.model import Model
+import plotly.graph_objs as go
+from plotly.subplots import make_subplots
 
 
 def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
@@ -218,139 +220,235 @@ def constrained_lasso(X, eta, A, b, p, k, lambda_value):
         return "Error converging to a solution"
 
 
-def calculate_metrics(Z, w, q):
-    """
-    Calculate reach and CTR
-
-    Parameters:
-    - Z (numpy.ndarray): Page view matrix (n x p), where n is the number of users, p is the number of websites.
-    - w (numpy.ndarray): Weights (budget allocations) of length p.
-    - q (numpy.ndarray): Clickthrough rates for each website (length p).
-
-    Returns:
-    - reach (float): Fraction of users reached.
-    - ctr (float): Click-through rate.
-    """
-
-    # Total exposure per user
-    exposure = Z.values @ w  # Matrix-vector multiplication (n-dimensional result)
-
-    # Reach: Fraction of users with exposure > 0
-    num_users = Z.shape[0]
-    reach = np.sum(exposure > 0) / num_users
-
-    # Clicks: Exposure weighted by clickthrough rates
-    clicks = Z.values @ (w * q)  # Element-wise multiplication of weights and CTRs
-
-    # CTR: Fraction of users with at least one click
-    ctr = np.sum(clicks > 0) / num_users
-
-    return reach, ctr
-
-
-def compute_reach_and_ctr(X1, Y1, beta):
+def compute_reach_and_ctr(page_view_matrix, site_info, beta):
     """
     Computes Reach and CTR based on page views, site information, and budget allocation.
 
     Parameters:
     - page_view_matrix (pd.DataFrame): Rows are machines, columns are websites, values are page views (z_ij).
     - site_info (pd.DataFrame): Contains columns ['Site_Name', 'Cost', 'Pages', 'Clickthrough'].
-    - beta (pd.Series): Budget allocation weights, indexed by Site_Name.
+    - beta (np.ndarray): Budget allocation weights, assumed to match the number of websites.
 
     Returns:
     - reach (float): Fraction of users exposed to at least one ad.
     - ctr (float): Fraction of users who clicked on at least one ad.
     """
-    X = X1.copy()
-    Y = Y1.copy()
-    # Step 1: Compute gamma (fraction of ads per dollar spent)
-    Y = Y.set_index("Site_Name")  # Set Site_Name as index for alignment
-    Y["gamma"] = 1 / ((Y["Pages"] / 1000) * Y["Cost"])
+    X = page_view_matrix.copy()
+    Y = site_info.copy()
 
-    # Step 2: Align beta with gamma using index
-    gamma_series = Y["gamma"]
-    scaling_factors = (
-        beta * gamma_series
-    )  # Element-wise multiplication to get beta * gamma
+    # Step 1: Prepare the data and align indices
+    Y = Y.set_index("Site_Name")  # Set index to Site_Name
+    X = X.fillna(0)  # Replace NA values with 0
 
-    # Step 3: Adjust page_view_matrix with scaling factors
-    adjusted_matrix = X.multiply(scaling_factors, axis=1)
+    # Step 2: Compute gamma (fraction of ads per dollar spent)
+    cost_per_thousand = Y["Cost"].values  # Cost per thousand impressions (CPM)
+    tau = Y["Pages"].values  # Total website visits (Pages)
+    gamma = 1 / (cost_per_thousand * tau)  # Gamma calculation
 
-    # Step 4: Compute Reach
-    reach_matrix = 1 - adjusted_matrix  # (1 - beta_j * gamma_j) for each website
-    reach_matrix = reach_matrix.pow(X)  # (1 - beta_j * gamma_j)^z_ij
-    reach_per_user = reach_matrix.prod(axis=1)  # Product across websites for each user
-    reach = 1 - reach_per_user.mean()  # Average across users and subtract from 1
+    # Step 3: Ensure beta aligns with the website order
+    beta = np.array(beta)  # Convert beta to NumPy array (if not already)
+    assert beta.shape[0] == X.shape[1], "Beta size must match number of websites"
 
-    # Step 5: Compute CTR
-    ctr_matrix = 1 - adjusted_matrix.multiply(
-        Y["Clickthrough"], axis=1
-    )  # (1 - beta_j * gamma_j * q_j)
-    ctr_matrix = ctr_matrix.pow(X)  # (1 - beta_j * gamma_j * q_j)^z_ij
-    ctr_per_user = ctr_matrix.prod(axis=1)  # Product across websites for each user
-    ctr = 1 - ctr_per_user.mean()  # Average across users and subtract from 1
+    # Step 4: Compute adjusted probabilities
+    beta_gamma = beta * gamma  # Element-wise multiplication of beta and gamma
+
+    # Compute the term for Reach: (1 - beta_j * gamma_j) raised to the power of z_ij
+    adjusted_reach_matrix = np.power(
+        1 - beta_gamma, X.values
+    )  # (1 - beta_j * gamma_j) ** z_ij
+    adjusted_reach_matrix = np.clip(
+        adjusted_reach_matrix, 0, 1
+    )  # Ensure no negative probabilities
+
+    # Step 5: Compute Reach
+    # Product over all websites for each user, then average across users
+    reach_per_user = np.prod(adjusted_reach_matrix, axis=1)  # Product across websites
+    reach = 1 - np.mean(reach_per_user)  # 1 - probability of no exposure
+
+    # Step 6: Compute CTR
+    clickthrough = Y["Clickthrough"].values  # Clickthrough rates (q_j)
+    beta_gamma_q = beta * gamma * clickthrough  # Combined beta, gamma, and clickthrough
+
+    # Compute the term for CTR: (1 - beta_j * gamma_j * q_j) raised to the power of z_ij
+    adjusted_ctr_matrix = np.power(
+        1 - beta_gamma_q, X.values
+    )  # (1 - beta_j * gamma_j * q_j) ** z_ij
+    adjusted_ctr_matrix = np.clip(
+        adjusted_ctr_matrix, 0, 1
+    )  # Ensure no negative probabilities
+
+    # Product over all websites for each user, then average across users
+    ctr_per_user = np.prod(adjusted_ctr_matrix, axis=1)  # Product across websites
+    ctr = 1 - np.mean(ctr_per_user)  # 1 - probability of no click
 
     return reach, ctr
 
 
 if __name__ == "__main__":
     # TODO: We have yet to consider demographic constraints
+    # TODO: Doesnt make sense to standardise
+    # TODO: CLasso has linear inequality but not sure if its needed here m
 
+    # Load data
     page_view_matrix = pd.read_csv(
         r"walkthrough/Page_View_Matrix_Example.csv", header=0, index_col=0
     )
     site_info = pd.read_csv(r"walkthrough/500_Site_Info_Example.csv", header=0)
 
+    # Compute covariance matrix (sigma) and mean (eta)
     sigma = page_view_matrix.iloc[:-1, :].cov(ddof=1)
     eta = page_view_matrix.iloc[:-1, :].mean().values
 
     p = 500
     k = 1
-    factor = 1.0
-    lambda_value = 0.1
 
-    result_dic = {}
-    portfolio_dic = {}
-    lambda_list = [i / 20 for i in range(19, 0, -1)]
-    for _lambda in lambda_list:
-        portfolio_dic[_lambda] = []
+    b_values = np.linspace(10, 500, 20)
+    factor = 1.0  # Scaling factor for CDE
 
-    A = np.ones(
-        (1, p)
-    )  # A represents a row vector of ones so A*beta = b represents sum of beta = b
-    b = np.array([1.0])  # b represents total website budget
+    lambda_list = [i / 20 for i in range(19, 8, -1)]
 
-    lambda_max, original_factor = find_lambda_max_cplex(sigma, eta, A, b, p, k, factor)
-    if lambda_max <= 0:
-        raise Exception("Lambda_max=0!")
+    # Initialize lists to store Reach and CTR results
+    reach_cde, ctr_cde = [], []
+    reach_classo, ctr_classo = [], []
 
-    return_list = np.empty(len(lambda_list))
-    for index, _lambda in enumerate(lambda_list):
-        print(f"Optimizing {index}:{_lambda}")
-        w = CDE_DOcplex(sigma, eta, A, b, p, k, original_factor, _lambda)
-
-        portfolio_dic[_lambda].append(w)
-        return_list[index] = page_view_matrix.iloc[-1].values @ w
-    result_dic[0] = return_list
-    result = pd.DataFrame.from_dict(result_dic)
-    result.index = lambda_list
-    result.to_csv(f"results.csv")
-    portfolios = pd.DataFrame.from_dict(portfolio_dic, orient="index")
-    portfolios.to_csv(f"portfolios.csv")
-    print("Done with CDE")
-
-    p = 500
-    k = 1
+    # A is the constraint matrix (row vector of ones)
     A = np.ones((1, p))
-    b = np.array([100])
-    lambda_value = 0.1
 
-    eta = page_view_matrix.sum(axis=1).values
+    for b in b_values:
+        print(f"Processing Budget: {b}")
+        lambda_max, original_factor = find_lambda_max_cplex(
+            sigma, eta, A, [b], p, k, factor
+        )
 
-    w = constrained_lasso(page_view_matrix, eta, A, b, p, k, lambda_value)
+        if lambda_max <= 0:
+            raise Exception("Lambda_max=0!")
 
-    # reach, ctr = calculate_metrics(page_view_matrix, w, site_info["Clickthrough"])
+        # ===== CDE Model =====
+        best_reach_cde, best_ctr_cde, best_lambda_cde = 0, 0, None
 
-    reach, ctr = compute_reach_and_ctr(page_view_matrix, site_info, w)
+        for _lambda in lambda_list:
+            w_cde = CDE_DOcplex(sigma, eta, A, [b], p, k, original_factor, _lambda)
 
-    print("Done with CLasso")
+            if isinstance(w_cde, np.ndarray):
+                r_cde, c_cde = compute_reach_and_ctr(page_view_matrix, site_info, w_cde)
+
+                if c_cde > best_ctr_cde:
+                    best_reach_cde, best_ctr_cde, best_lambda_cde = (
+                        r_cde,
+                        c_cde,
+                        _lambda,
+                    )
+
+        reach_cde.append(best_reach_cde)
+        ctr_cde.append(best_ctr_cde)
+        print(f"Best Lambda for CDE: {best_lambda_cde}")
+
+        # ===== CLasso Model =====
+        best_reach_classo, best_ctr_classo, best_lambda_classo = 0, 0, None
+
+        for lambda_value in lambda_list:
+            eta_classo = page_view_matrix.sum(axis=1).values  # CLasso target vector
+            w_classo = constrained_lasso(
+                page_view_matrix, eta_classo, A, [b], p, k, lambda_value
+            )
+
+            if isinstance(w_classo, np.ndarray):
+                r_classo, c_classo = compute_reach_and_ctr(
+                    page_view_matrix, site_info, w_classo
+                )
+
+                if c_classo > best_ctr_classo:
+                    best_reach_classo, best_ctr_classo, best_lambda_classo = (
+                        r_classo,
+                        c_classo,
+                        lambda_value,
+                    )
+
+        reach_classo.append(best_reach_classo)
+        ctr_classo.append(best_ctr_classo)
+        print(f"Best Lambda for CLasso: {best_lambda_classo}")
+
+    results = pd.DataFrame(
+        {
+            "Budget": b_values,
+            "Reach_CDE": reach_cde,
+            "CTR_CDE": ctr_cde,
+            "Reach_CLasso": reach_classo,
+            "CTR_CLasso": ctr_classo,
+        }
+    )
+
+    results.to_csv(f"cde_classo_results_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv", index=False)
+    print("Results saved")
+
+    # ===== Plot Results =====
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=("Reach vs Budget", "Click Rate vs Budget"),
+    )
+
+    # Reach Plot
+    fig.add_trace(
+        go.Scatter(
+            x=b_values,
+            y=reach_cde,
+            mode="lines+markers",
+            name="CDE - Reach",
+            line=dict(width=2),
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=b_values,
+            y=reach_classo,
+            mode="lines+markers",
+            name="CLasso - Reach",
+            line=dict(width=2, dash="dash"),
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=b_values,
+            y=ctr_cde,
+            mode="lines+markers",
+            name="CDE - CTR",
+            line=dict(width=2),
+        ),
+        row=1,
+        col=2,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=b_values,
+            y=ctr_classo,
+            mode="lines+markers",
+            name="CLasso - CTR",
+            line=dict(width=2, dash="dash"),
+        ),
+        row=1,
+        col=2,
+    )
+
+    fig.update_layout(
+        title_text="Performance of CDE and CLasso Models", showlegend=True
+    )
+
+    # Update axis titles
+    fig.update_xaxes(title_text="Budget", row=1, col=1)
+    fig.update_yaxes(title_text="Reach", row=1, col=1)
+
+    fig.update_xaxes(title_text="Budget", row=1, col=2)
+    fig.update_yaxes(title_text="Click Rate", row=1, col=2)
+
+    # Show the plot
+    fig.show()
+
+    print("Done!")
