@@ -1,5 +1,7 @@
+import requests
 import pandas as pd
 import numpy as np
+from sklearn.model_selection import train_test_split
 from docplex.mp.model import Model
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
@@ -30,7 +32,7 @@ def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
     model.parameters.lpmethod = 4
 
     # Define w variables
-    w = np.array(model.continuous_var_list(p, lb=-model.infinity, name="w"))
+    w = np.array(model.continuous_var_list(p, lb=0, name="w"))
 
     # Objective: minimize sum of abs(w[i])
     model.minimize(model.sum(model.abs(w[i]) for i in range(p)))
@@ -56,7 +58,7 @@ def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
     model.parameters.read.scale = -1
     model.parameters.lpmethod = 4
 
-    w = np.array(model.continuous_var_list(p, lb=-model.infinity, name="w"))
+    w = np.array(model.continuous_var_list(p, lb=0, name="w"))
     gamma = np.array(model.continuous_var_list(k, lb=-model.infinity, name="gamma"))
     _lambda_scaled = model.continuous_var(name="lambda")
 
@@ -93,11 +95,7 @@ def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
         raise Exception("Infeasible lp2: Could not find a feasible lambda.")
 
     lambda_max = solution.get_value(_lambda_scaled)
-    if lambda_max != 0:
-        new_factor = factor / lambda_max
-    else:
-        new_factor = factor
-
+    new_factor = factor / lambda_max if lambda_max != 0 else factor
     model.clear()
     return lambda_max, new_factor
 
@@ -127,9 +125,7 @@ def CDE_DOcplex(sigma, eta, A, b, p, k, factor, _lambda_scaled):
     model.parameters.lpmethod = 4
 
     # Define variables similar to reference code: w and gamma
-    w = np.array(
-        model.continuous_var_list([f"w{i}" for i in range(p)], lb=-model.infinity)
-    )
+    w = np.array(model.continuous_var_list([f"w{i}" for i in range(p)], lb=0))
     gamma = np.array(
         model.continuous_var_list([f"gamma{i}" for i in range(k)], lb=-model.infinity)
     )
@@ -247,9 +243,7 @@ def compute_reach_and_ctr(page_view_matrix, site_info, beta):
     adjusted_reach_matrix = np.power(
         1 - beta_gamma, X.values
     )  # (1 - beta_j * gamma_j) ** z_ij
-    adjusted_reach_matrix = np.clip(
-        adjusted_reach_matrix, 0, 1
-    )  # keep in range [0, 1]
+    adjusted_reach_matrix = np.clip(adjusted_reach_matrix, 0, 1)  # keep in range [0, 1]
 
     # Step 5: Compute Reach based on PaC article
     # Product over all websites for each user, then average across users
@@ -275,166 +269,244 @@ def compute_reach_and_ctr(page_view_matrix, site_info, beta):
 
 
 if __name__ == "__main__":
+    # TODO: So far CDE performs better when p >> n and CLasso performs better when n >> p
+    # TODO: Script uses 80-20 train-test data, K-fold would have too little sample points due to small n
     # TODO: We have yet to consider demographic constraints
-    # TODO: Doesnt make sense to standardise
-    # TODO: CLasso has linear inequality but not sure if its needed here m
+    # TODO: CLasso has linear inequality but not sure if its needed
 
-    # Load data
-    page_view_matrix = pd.read_csv(
-        r"walkthrough/Page_View_Matrix_Example.csv", header=0, index_col=0
-    )
-    site_info = pd.read_csv(r"walkthrough/500_Site_Info_Example.csv", header=0)
+    try:
+        page_view_matrix = pd.read_csv(
+            r"walkthrough/Page_View_Matrix_Example.csv", header=0, index_col=0
+        )
+        site_info = pd.read_csv(r"walkthrough/500_Site_Info_Example.csv", header=0)
 
-    # Compute covariance matrix (sigma) and mean (eta)
-    sigma = page_view_matrix.iloc[:-1, :].cov(ddof=1)
-    eta = page_view_matrix.iloc[:-1, :].mean().values
+        page_view_matrix_subset = page_view_matrix.sample(n=200, random_state=2)
 
-    p = 500
-    k = 1
-
-    b_values = np.linspace(10, 500, 20)
-    factor = 1.0  # Scaling factor for CDE
-
-    lambda_list = [i / 20 for i in range(19, 8, -1)]
-
-    reach_cde, ctr_cde = [], []
-    reach_classo, ctr_classo = [], []
-
-    # A is the constraint matrix (row vector of ones)
-    A = np.ones((1, p))
-
-    for b in b_values:
-        print(f"Processing Budget: {b}")
-        lambda_max, original_factor = find_lambda_max_cplex(
-            sigma, eta, A, [b], p, k, factor
+        train_matrix, test_matrix = train_test_split(
+            page_view_matrix_subset, test_size=0.2, random_state=2
         )
 
-        if lambda_max <= 0:
-            raise Exception("Lambda_max=0!")
+        sigma = train_matrix.cov(ddof=1)
+        eta = train_matrix.mean().values
 
-        # ===== CDE Model =====
-        best_reach_cde, best_ctr_cde, best_lambda_cde = 0, 0, None
+        p = 500
+        k = 1
 
-        for _lambda in lambda_list:
-            w_cde = CDE_DOcplex(sigma, eta, A, [b], p, k, original_factor, _lambda)
+        b_values = np.linspace(10, 500, 20)
+        factor = 1.0
 
-            if isinstance(w_cde, np.ndarray):
-                r_cde, c_cde = compute_reach_and_ctr(page_view_matrix, site_info, w_cde)
+        lambda_list_cde = [i / 10 for i in range(8, 20)]
+        lambda_list_classo = np.linspace(0.01, 5.0, 12)
 
-                if c_cde > best_ctr_cde:
-                    best_reach_cde, best_ctr_cde, best_lambda_cde = (
-                        r_cde,
-                        c_cde,
-                        _lambda,
-                    )
+        reach_cde, ctr_cde = [], []
+        reach_classo, ctr_classo = [], []
 
-        reach_cde.append(best_reach_cde)
-        ctr_cde.append(best_ctr_cde)
-        print(f"Best Lambda for CDE: {best_lambda_cde}")
+        sparsity_cde, sparsity_classo = [], []
 
-        # ===== CLasso Model =====
-        best_reach_classo, best_ctr_classo, best_lambda_classo = 0, 0, None
+        A = np.ones((1, p))
 
-        for lambda_value in lambda_list:
-            eta_classo = page_view_matrix.sum(axis=1).values  # CLasso target vector
-            w_classo = constrained_lasso(
-                page_view_matrix, eta_classo, A, [b], p, k, lambda_value
+        for b in b_values:
+            print(f"Processing Budget: {b}")
+            lambda_max, original_factor = find_lambda_max_cplex(
+                sigma, eta, A, [b], p, k, factor
             )
 
-            if isinstance(w_classo, np.ndarray):
-                r_classo, c_classo = compute_reach_and_ctr(
-                    page_view_matrix, site_info, w_classo
+            if lambda_max <= 0:
+                raise Exception("Lambda_max=0!")
+
+            # ===== CDE =====
+            best_w_cde = None
+            best_reach_cde, best_ctr_cde, best_lambda_cde = 0, 0, None
+
+            for _lambda in lambda_list_cde:
+                w_cde = CDE_DOcplex(sigma, eta, A, [b], p, k, original_factor, _lambda)
+
+                if isinstance(w_cde, np.ndarray):
+                    r_cde, c_cde = compute_reach_and_ctr(test_matrix, site_info, w_cde)
+                    if c_cde > best_ctr_cde:
+                        best_reach_cde, best_ctr_cde, best_lambda_cde = (
+                            r_cde,
+                            c_cde,
+                            _lambda,
+                        )
+                        best_w_cde = w_cde
+
+            reach_cde.append(best_reach_cde)
+            ctr_cde.append(best_ctr_cde)
+            print(f"Best Lambda for CDE: {best_lambda_cde}")
+
+            # ===== CLasso =====
+            best_w_classo = None
+            best_reach_classo, best_ctr_classo, best_lambda_classo = 0, 0, None
+
+            for lambda_value in lambda_list_classo:
+                eta_classo = train_matrix.sum(axis=1).values
+                w_classo = constrained_lasso(
+                    train_matrix, eta_classo, A, [b], p, k, lambda_value
                 )
-
-                if c_classo > best_ctr_classo:
-                    best_reach_classo, best_ctr_classo, best_lambda_classo = (
-                        r_classo,
-                        c_classo,
-                        lambda_value,
+                if isinstance(w_classo, np.ndarray):
+                    r_classo, c_classo = compute_reach_and_ctr(
+                        test_matrix, site_info, w_classo
                     )
+                    if c_classo > best_ctr_classo:
+                        best_reach_classo, best_ctr_classo, best_lambda_classo = (
+                            r_classo,
+                            c_classo,
+                            lambda_value,
+                        )
+                        best_w_classo = w_classo
 
-        reach_classo.append(best_reach_classo)
-        ctr_classo.append(best_ctr_classo)
-        print(f"Best Lambda for CLasso: {best_lambda_classo}")
+            # ===== Sparsity Comparison =====
+            if best_w_cde is not None:
+                cde_sparsity = np.sum(np.abs(best_w_cde) > 1e-9)
+            else:
+                cde_sparsity = 0
 
-    results = pd.DataFrame(
-        {
-            "Budget": b_values,
-            "Reach_CDE": reach_cde,
-            "CTR_CDE": ctr_cde,
-            "Reach_CLasso": reach_classo,
-            "CTR_CLasso": ctr_classo,
-        }
-    )
+            if best_w_classo is not None:
+                classo_sparsity = np.sum(np.abs(best_w_classo) > 1e-9)
+            else:
+                classo_sparsity = 0
 
-    results.to_csv(f"cde_classo_results_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv", index=False)
-    print("Results saved")
+            sparsity_cde.append(cde_sparsity)
+            sparsity_classo.append(classo_sparsity)
 
-    # ===== Plot Results =====
-    fig = make_subplots(
-        rows=1,
-        cols=2,
-        subplot_titles=("Reach vs Budget", "Click Rate vs Budget"),
-    )
+            reach_classo.append(best_reach_classo)
+            ctr_classo.append(best_ctr_classo)
 
-    fig.add_trace(
-        go.Scatter(
-            x=b_values,
-            y=reach_cde,
-            mode="lines+markers",
-            name="CDE - Reach",
-            line=dict(width=2),
-        ),
-        row=1,
-        col=1,
-    )
+            print(f"Best Lambda for CLasso: {best_lambda_classo}")
 
-    fig.add_trace(
-        go.Scatter(
-            x=b_values,
-            y=reach_classo,
-            mode="lines+markers",
-            name="CLasso - Reach",
-            line=dict(width=2, dash="dash"),
-        ),
-        row=1,
-        col=1,
-    )
+        # results = pd.DataFrame(
+        #     {
+        #         "Budget": b_values,
+        #         "Reach_CDE": reach_cde,
+        #         "CTR_CDE": ctr_cde,
+        #         "Reach_CLasso": reach_classo,
+        #         "CTR_CLasso": ctr_classo,
+        #     }
+        # )
 
-    fig.add_trace(
-        go.Scatter(
-            x=b_values,
-            y=ctr_cde,
-            mode="lines+markers",
-            name="CDE - CTR",
-            line=dict(width=2),
-        ),
-        row=1,
-        col=2,
-    )
+        # results.to_csv(f"cde_classo_results_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv", index=False)
+        # print("Results saved")
 
-    fig.add_trace(
-        go.Scatter(
-            x=b_values,
-            y=ctr_classo,
-            mode="lines+markers",
-            name="CLasso - CTR",
-            line=dict(width=2, dash="dash"),
-        ),
-        row=1,
-        col=2,
-    )
+        # response = requests.post(
+        #     f"https://ntfy.sh/firaz_python",
+        #     data="✅ Script finished running".encode("utf-8"),
+        #     headers={
+        #         "Title": "Script Completed".encode("utf-8").decode("latin-1"),
+        #         "Priority": "high",
+        #         "Tags": "check",
+        #     },
+        # )
 
-    fig.update_layout(
-        title_text="Performance of CDE and CLasso Models", showlegend=True
-    )
+        fig = make_subplots(
+            rows=1, cols=2, subplot_titles=("Reach vs Budget", "Click Rate vs Budget")
+        )
 
-    fig.update_xaxes(title_text="Budget", row=1, col=1)
-    fig.update_yaxes(title_text="Reach", row=1, col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=b_values,
+                y=reach_cde,
+                mode="lines+markers",
+                name="CDE - Reach",
+                line=dict(color="red", width=2),  # Red line
+                marker=dict(symbol="circle"),
+            ),
+            row=1,
+            col=1,
+        )
 
-    fig.update_xaxes(title_text="Budget", row=1, col=2)
-    fig.update_yaxes(title_text="Click Rate", row=1, col=2)
+        fig.add_trace(
+            go.Scatter(
+                x=b_values,
+                y=reach_classo,
+                mode="lines+markers",
+                name="CLasso - Reach",
+                line=dict(color="black", width=2),  # Black line
+                marker=dict(symbol="circle"),
+            ),
+            row=1,
+            col=1,
+        )
 
-    fig.show()
+        fig.add_trace(
+            go.Scatter(
+                x=b_values,
+                y=ctr_cde,
+                mode="lines+markers",
+                name="CDE - CTR",
+                line=dict(color="red", width=2),  # Red line
+                marker=dict(symbol="circle"),
+            ),
+            row=1,
+            col=2,
+        )
 
-    print("Done!")
+        fig.add_trace(
+            go.Scatter(
+                x=b_values,
+                y=ctr_classo,
+                mode="lines+markers",
+                name="CLasso - CTR",
+                line=dict(color="black", width=2),  # Black line
+                marker=dict(symbol="circle"),
+            ),
+            row=1,
+            col=2,
+        )
+
+        fig.update_layout(
+            title_text="Performance of CDE and CLasso Models", showlegend=True
+        )
+        fig.update_xaxes(title_text="Budget", row=1, col=1)
+        fig.update_yaxes(title_text="Reach", row=1, col=1)
+        fig.update_xaxes(title_text="Budget", row=1, col=2)
+        fig.update_yaxes(title_text="Click Rate", row=1, col=2)
+
+        fig.show()
+
+        fig2 = make_subplots(rows=1, cols=1, subplot_titles=("Sparsity vs. Budget",))
+
+        fig2.add_trace(
+            go.Scatter(
+                x=b_values,
+                y=sparsity_cde,
+                mode="lines+markers",
+                name="CDE Sparsity",
+                line=dict(color="red", width=2),  # Red line
+                marker=dict(symbol="circle"),
+            ),
+            row=1,
+            col=1,
+        )
+
+        fig2.add_trace(
+            go.Scatter(
+                x=b_values,
+                y=sparsity_classo,
+                mode="lines+markers",
+                name="CLasso Sparsity",
+                line=dict(color="black", width=2),  # Black line
+                marker=dict(symbol="circle"),
+            ),
+            row=1,
+            col=1,
+        )
+
+        fig2.update_layout(title="Sparsity Comparison", showlegend=True)
+
+        fig2.show()
+
+        print("Done!")
+
+    except Exception as e:
+        # response = requests.post(
+        #     f"https://ntfy.sh/firaz_python",
+        #     data="❌ Script Failed! Please check for errors.".encode("utf-8"),
+        #     headers={
+        #         "Title": "Script Failed".encode("utf-8").decode("latin-1"),
+        #         "Priority": "high",
+        #         "Tags": "cross,fire",
+        #         "Sound": "siren",
+        #     },
+        # )
+        print(f"Error running script: {e}")
