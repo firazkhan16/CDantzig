@@ -270,123 +270,142 @@ def compute_reach_and_ctr(page_view_matrix, site_info, beta):
 
 if __name__ == "__main__":
     # TODO: So far CDE performs better when p >> n and CLasso performs better when n >> p
-    # TODO: Script uses 80-20 train-test data, K-fold would have too little sample points due to small n
+    # TODO: Script uses 80-20 train-test data, K-fold seems infeasible if considering high dimension
     # TODO: We have yet to consider demographic constraints
     # TODO: CLasso has linear inequality but not sure if its needed
 
     try:
+        # p = 500 so n = 200 represents p >> n (high dim) while n = 1000 represents n >> p (classic)
+        sample_sizes = [200, 1000]
+
+        reach_results = {200: {}, 1000: {}}
+        ctr_results = {200: {}, 1000: {}}
+        sparsity_results = {200: {}, 1000: {}}
+
+        b_values = np.linspace(10, 500, 20)
+        factor = 1.0
+        p = 500
+        k = 1
+        lambda_list_cde = [i / 10 for i in range(8, 20)]
+        lambda_list_classo = np.linspace(0.01, 5.0, 12)
+
         page_view_matrix = pd.read_csv(
             r"walkthrough/Page_View_Matrix_Example.csv", header=0, index_col=0
         )
         site_info = pd.read_csv(r"walkthrough/500_Site_Info_Example.csv", header=0)
 
-        page_view_matrix_subset = page_view_matrix.sample(n=200, random_state=2)
+        for n in sample_sizes:
+            print(f"Sample size: {n}")
+            page_view_matrix_subset = page_view_matrix.sample(n=n, random_state=2)
 
-        train_matrix, test_matrix = train_test_split(
-            page_view_matrix_subset, test_size=0.2, random_state=2
-        )
-
-        sigma = train_matrix.cov(ddof=1)
-        eta = train_matrix.mean().values
-
-        p = 500
-        k = 1
-
-        b_values = np.linspace(10, 500, 20)
-        factor = 1.0
-
-        lambda_list_cde = [i / 10 for i in range(8, 20)]
-        lambda_list_classo = np.linspace(0.01, 5.0, 12)
-
-        reach_cde, ctr_cde = [], []
-        reach_classo, ctr_classo = [], []
-
-        sparsity_cde, sparsity_classo = [], []
-
-        A = np.ones((1, p))
-
-        for b in b_values:
-            print(f"Processing Budget: {b}")
-            lambda_max, original_factor = find_lambda_max_cplex(
-                sigma, eta, A, [b], p, k, factor
+            train_matrix, test_matrix = train_test_split(
+                page_view_matrix_subset, test_size=0.2, random_state=2
             )
 
-            if lambda_max <= 0:
-                raise Exception("Lambda_max=0!")
+            sigma = train_matrix.cov(ddof=1)
+            eta = train_matrix.mean().values
 
-            # ===== CDE =====
-            best_w_cde = None
-            best_reach_cde, best_ctr_cde, best_lambda_cde = 0, 0, None
+            reach_cde, ctr_cde = [], []
+            reach_classo, ctr_classo = [], []
 
-            for _lambda in lambda_list_cde:
-                w_cde = CDE_DOcplex(sigma, eta, A, [b], p, k, original_factor, _lambda)
+            sparsity_cde, sparsity_classo = [], []
 
-                if isinstance(w_cde, np.ndarray):
-                    r_cde, c_cde = compute_reach_and_ctr(test_matrix, site_info, w_cde)
-                    if c_cde > best_ctr_cde:
-                        best_reach_cde, best_ctr_cde, best_lambda_cde = (
-                            r_cde,
-                            c_cde,
-                            _lambda,
-                        )
-                        best_w_cde = w_cde
+            A = np.ones((1, p))
 
-            reach_cde.append(best_reach_cde)
-            ctr_cde.append(best_ctr_cde)
-            print(f"Best Lambda for CDE: {best_lambda_cde}")
-
-            # ===== CLasso =====
-            best_w_classo = None
-            best_reach_classo, best_ctr_classo, best_lambda_classo = 0, 0, None
-
-            for lambda_value in lambda_list_classo:
-                eta_classo = train_matrix.sum(axis=1).values
-                w_classo = constrained_lasso(
-                    train_matrix, eta_classo, A, [b], p, k, lambda_value
+            for b in b_values:
+                print(f"Processing Budget: {b}")
+                lambda_max, original_factor = find_lambda_max_cplex(
+                    sigma, eta, A, [b], p, k, factor
                 )
-                if isinstance(w_classo, np.ndarray):
-                    r_classo, c_classo = compute_reach_and_ctr(
-                        test_matrix, site_info, w_classo
+
+                if lambda_max <= 0:
+                    raise Exception("Lambda_max=0!")
+
+                # ===== CDE =====
+                best_w_cde = None
+                best_reach_cde, best_ctr_cde, best_lambda_cde = 0, 0, None
+
+                for _lambda in lambda_list_cde:
+                    w_cde = CDE_DOcplex(
+                        sigma, eta, A, [b], p, k, original_factor, _lambda
                     )
-                    if c_classo > best_ctr_classo:
-                        best_reach_classo, best_ctr_classo, best_lambda_classo = (
-                            r_classo,
-                            c_classo,
-                            lambda_value,
+
+                    if isinstance(w_cde, np.ndarray):
+                        r_cde, c_cde = compute_reach_and_ctr(
+                            test_matrix, site_info, w_cde
                         )
-                        best_w_classo = w_classo
+                        if c_cde > best_ctr_cde:
+                            best_reach_cde, best_ctr_cde, best_lambda_cde = (
+                                r_cde,
+                                c_cde,
+                                _lambda,
+                            )
+                            best_w_cde = w_cde
 
-            # ===== Sparsity Comparison =====
-            if best_w_cde is not None:
-                cde_sparsity = np.sum(np.abs(best_w_cde) > 1e-9)
-            else:
-                cde_sparsity = 0
+                reach_cde.append(best_reach_cde)
+                ctr_cde.append(best_ctr_cde)
+                print(f"Best Lambda for CDE: {best_lambda_cde}")
 
-            if best_w_classo is not None:
-                classo_sparsity = np.sum(np.abs(best_w_classo) > 1e-9)
-            else:
-                classo_sparsity = 0
+                # ===== CLasso =====
+                best_w_classo = None
+                best_reach_classo, best_ctr_classo, best_lambda_classo = 0, 0, None
 
-            sparsity_cde.append(cde_sparsity)
-            sparsity_classo.append(classo_sparsity)
+                for lambda_value in lambda_list_classo:
+                    eta_classo = train_matrix.sum(axis=1).values
+                    w_classo = constrained_lasso(
+                        train_matrix, eta_classo, A, [b], p, k, lambda_value
+                    )
+                    if isinstance(w_classo, np.ndarray):
+                        r_classo, c_classo = compute_reach_and_ctr(
+                            test_matrix, site_info, w_classo
+                        )
+                        if c_classo > best_ctr_classo:
+                            best_reach_classo, best_ctr_classo, best_lambda_classo = (
+                                r_classo,
+                                c_classo,
+                                lambda_value,
+                            )
+                            best_w_classo = w_classo
 
-            reach_classo.append(best_reach_classo)
-            ctr_classo.append(best_ctr_classo)
+                reach_classo.append(best_reach_classo)
+                ctr_classo.append(best_ctr_classo)
+                print(f"Best Lambda for CLasso: {best_lambda_classo}")
 
-            print(f"Best Lambda for CLasso: {best_lambda_classo}")
+                # ===== Sparsity Comparison =====
+                if best_w_cde is not None:
+                    cde_sparsity = np.sum(np.abs(best_w_cde) > 1e-9)
+                else:
+                    cde_sparsity = 0
 
-        # results = pd.DataFrame(
-        #     {
-        #         "Budget": b_values,
-        #         "Reach_CDE": reach_cde,
-        #         "CTR_CDE": ctr_cde,
-        #         "Reach_CLasso": reach_classo,
-        #         "CTR_CLasso": ctr_classo,
-        #     }
-        # )
+                if best_w_classo is not None:
+                    classo_sparsity = np.sum(np.abs(best_w_classo) > 1e-9)
+                else:
+                    classo_sparsity = 0
 
-        # results.to_csv(f"cde_classo_results_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv", index=False)
-        # print("Results saved")
+                sparsity_cde.append(cde_sparsity)
+                sparsity_classo.append(classo_sparsity)
+
+            reach_results[n] = {"CDE": reach_cde, "CLasso": reach_classo}
+            ctr_results[n] = {"CDE": ctr_cde, "CLasso": ctr_classo}
+            sparsity_results[n] = {"CDE": sparsity_cde, "CLasso": sparsity_classo}
+
+        # results = []
+        # for n in sample_sizes:
+        #     for i, b in enumerate(b_values):
+        #         results.append({
+        #             "Sample Size (n)": n,
+        #             "Budget": b,
+        #             "Reach_CDE": reach_results[n]["CDE"][i],
+        #             "CTR_CDE": ctr_results[n]["CDE"][i],
+        #             "Sparsity_CDE": sparsity_results[n]["CDE"][i],
+        #             "Reach_CLasso": reach_results[n]["CLasso"][i],
+        #             "CTR_CLasso": ctr_results[n]["CLasso"][i],
+        #             "Sparsity_CLasso": sparsity_results[n]["CLasso"][i]
+        #         })
+        #
+        # results_df = pd.DataFrame(results)
+        # results_df.to_csv(f"cde_classo_results_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv", index=False)
+        # print("Results saved to CSV")
 
         # response = requests.post(
         #     f"https://ntfy.sh/firaz_python",
@@ -399,102 +418,96 @@ if __name__ == "__main__":
         # )
 
         fig = make_subplots(
-            rows=1, cols=2, subplot_titles=("Reach vs Budget", "Click Rate vs Budget")
+            rows=2,
+            cols=3,
+            subplot_titles=[
+                "Reach (n=200)",
+                "Click Rate (n=200)",
+                "Sparsity (n=200)",
+                "Reach (n=1000)",
+                "Click Rate (n=1000)",
+                "Sparsity (n=1000)",
+            ],
         )
 
-        fig.add_trace(
-            go.Scatter(
-                x=b_values,
-                y=reach_cde,
-                mode="lines+markers",
-                name="CDE - Reach",
-                line=dict(color="red", width=2),  # Red line
-                marker=dict(symbol="circle"),
-            ),
-            row=1,
-            col=1,
-        )
+        for i, n in enumerate(sample_sizes, start=1):
+            fig.add_trace(
+                go.Scatter(
+                    x=b_values,
+                    y=reach_results[n]["CDE"],
+                    mode="lines+markers",
+                    name=f"CDE - Reach (n={n})",
+                    line=dict(color="red"),
+                ),
+                row=i,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=b_values,
+                    y=reach_results[n]["CLasso"],
+                    mode="lines+markers",
+                    name=f"CLasso - Reach (n={n})",
+                    line=dict(color="black"),
+                ),
+                row=i,
+                col=1,
+            )
 
-        fig.add_trace(
-            go.Scatter(
-                x=b_values,
-                y=reach_classo,
-                mode="lines+markers",
-                name="CLasso - Reach",
-                line=dict(color="black", width=2),  # Black line
-                marker=dict(symbol="circle"),
-            ),
-            row=1,
-            col=1,
-        )
+            fig.add_trace(
+                go.Scatter(
+                    x=b_values,
+                    y=ctr_results[n]["CDE"],
+                    mode="lines+markers",
+                    name=f"CDE - CTR (n={n})",
+                    line=dict(color="red"),
+                ),
+                row=i,
+                col=2,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=b_values,
+                    y=ctr_results[n]["CLasso"],
+                    mode="lines+markers",
+                    name=f"CLasso - CTR (n={n})",
+                    line=dict(color="black"),
+                ),
+                row=i,
+                col=2,
+            )
 
-        fig.add_trace(
-            go.Scatter(
-                x=b_values,
-                y=ctr_cde,
-                mode="lines+markers",
-                name="CDE - CTR",
-                line=dict(color="red", width=2),  # Red line
-                marker=dict(symbol="circle"),
-            ),
-            row=1,
-            col=2,
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=b_values,
-                y=ctr_classo,
-                mode="lines+markers",
-                name="CLasso - CTR",
-                line=dict(color="black", width=2),  # Black line
-                marker=dict(symbol="circle"),
-            ),
-            row=1,
-            col=2,
-        )
+            fig.add_trace(
+                go.Scatter(
+                    x=b_values,
+                    y=sparsity_results[n]["CDE"],
+                    mode="lines+markers",
+                    name=f"CDE - Sparsity (n={n})",
+                    line=dict(color="red"),
+                ),
+                row=i,
+                col=3,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=b_values,
+                    y=sparsity_results[n]["CLasso"],
+                    mode="lines+markers",
+                    name=f"CLasso - Sparsity (n={n})",
+                    line=dict(color="black"),
+                ),
+                row=i,
+                col=3,
+            )
 
         fig.update_layout(
-            title_text="Performance of CDE and CLasso Models", showlegend=True
+            title_text="CDE and CLasso Performance for Different Sample Sizes (n=200, 1000)",
+            height=900,
+            showlegend=False,
         )
-        fig.update_xaxes(title_text="Budget", row=1, col=1)
-        fig.update_yaxes(title_text="Reach", row=1, col=1)
-        fig.update_xaxes(title_text="Budget", row=1, col=2)
-        fig.update_yaxes(title_text="Click Rate", row=1, col=2)
-
+        fig.update_xaxes(title_text="Budget")
+        fig.update_yaxes(title_text="")
         fig.show()
-
-        fig2 = make_subplots(rows=1, cols=1, subplot_titles=("Sparsity vs. Budget",))
-
-        fig2.add_trace(
-            go.Scatter(
-                x=b_values,
-                y=sparsity_cde,
-                mode="lines+markers",
-                name="CDE Sparsity",
-                line=dict(color="red", width=2),  # Red line
-                marker=dict(symbol="circle"),
-            ),
-            row=1,
-            col=1,
-        )
-
-        fig2.add_trace(
-            go.Scatter(
-                x=b_values,
-                y=sparsity_classo,
-                mode="lines+markers",
-                name="CLasso Sparsity",
-                line=dict(color="black", width=2),  # Black line
-                marker=dict(symbol="circle"),
-            ),
-            row=1,
-            col=1,
-        )
-
-        fig2.update_layout(title="Sparsity Comparison", showlegend=True)
-
-        fig2.show()
 
         print("Done!")
 
