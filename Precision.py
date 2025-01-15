@@ -284,26 +284,27 @@ if __name__ == "__main__":
         pass
     except Exception as e:
         print(e)
-        response = requests.post(
-            f"https://ntfy.sh/firaz_python",
-            data="❌ Script Failed! Please check for errors.".encode("utf-8"),
-            headers={
-                "Title": "Script Failed".encode("utf-8").decode("latin-1"),
-                "Priority": "high",
-                "Tags": "cross,fire",
-                "Sound": "siren",
-            },
-        )
+        # response = requests.post(
+        #     f"https://ntfy.sh/firaz_python",
+        #     data="❌ Script Failed! Please check for errors.".encode("utf-8"),
+        #     headers={
+        #         "Title": "Script Failed".encode("utf-8").decode("latin-1"),
+        #         "Priority": "high",
+        #         "Tags": "cross,fire",
+        #         "Sound": "siren",
+        #     },
+        # )
     else:
-        response = requests.post(
-            f"https://ntfy.sh/firaz_python",
-            data="✅ Script finished running".encode("utf-8"),
-            headers={
-                "Title": "Script Completed".encode("utf-8").decode("latin-1"),
-                "Priority": "high",
-                "Tags": "check",
-            },
-        )
+        # response = requests.post(
+        #     f"https://ntfy.sh/firaz_python",
+        #     data="✅ Script finished running".encode("utf-8"),
+        #     headers={
+        #         "Title": "Script Completed".encode("utf-8").decode("latin-1"),
+        #         "Priority": "high",
+        #         "Tags": "check",
+        #     },
+        # )
+        pass
 
     # Check est_Theta for positive definiteness
     eigenvalues = eigvals(est_Theta)
