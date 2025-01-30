@@ -9,34 +9,85 @@ from numpy.linalg import eigvals
 np.random.seed(123)
 
 
-def find_lambda_max_column(S, e_i, p):
-    # TODO: No phase 1 since no linear equality constraints so no benchmark beta
-    # TODO: Minimising lambda subject to constraint involving beta which is unknown
-
-    model = Model("lambda_max_column")
+def find_lambda_max_column(S, e_i, p, factor, fixed_values=None):
+    model = Model("lp1")
     model.parameters.read.scale = -1
     model.parameters.lpmethod = 4
 
-    w_vars = model.continuous_var_list(p, lb=-model.infinity, name="beta")
+    w = np.array(
+        model.continuous_var_list([f"w{i}" for i in range(p)], lb=-model.infinity)
+    )
+
+    # Objective: minimize sum of abs(w[i])
+    model.minimize(model.sum(model.abs(w[i]) for i in range(p)))
+
+    if fixed_values is not None:
+        for j, val in fixed_values.items():
+            model.add_constraint(w[j] == val)
+
+    solution = model.solve()
+    if solution is None or model.solve_status.value != 2:
+        model.clear()
+        raise Exception(
+            "Infeasible lp1: Could not find a feasible solution to the baseline problem."
+        )
+
+    lp1_norm = solution.get_objective_value()
+    model.clear()
+
+    # PHASE 2: Solve lp2 to find max lambda
+    model = Model("lp2")
+    model.parameters.read.scale = -1
+    model.parameters.lpmethod = 4
+
+    w = np.array(
+        model.continuous_var_list([f"w{i}" for i in range(p)], lb=-model.infinity)
+    )
     _lambda_scaled = model.continuous_var(name="lambda")
 
     model.minimize(_lambda_scaled)
 
     # Infinity norm constraints: -lambda <= (S[row,:] dot w) - e_i[row] <= lambda
     for row in range(p):
-        lhs = model.sum(S[row, col] * w_vars[col] for col in range(p)) - e_i[row]
+        lhs = model.sum(S[row, col] * w[col] for col in range(p)) - e_i[row]
         model.add_constraint(lhs <= _lambda_scaled)
         model.add_constraint(lhs >= -_lambda_scaled)
 
+    if fixed_values is not None:
+        for j, val in fixed_values.items():
+            model.add_constraint(w[j] == val)
+
+    expr = model.sum(model.abs(w[i]) for i in range(p))
+    model.add_constraint(expr == lp1_norm)
+
+    # Solve lp2
     solution = model.solve()
-    if solution is None:
-        raise RuntimeError("No feasible solution found for lambda_max.")
+    if solution is None or model.solve_status.value != 2:
+        model.clear()
+        raise Exception("Infeasible lp2: Could not find a feasible lambda.")
 
     lambda_max = solution.get_value(_lambda_scaled)
-    scaling_factor = 1 / lambda_max if lambda_max != 0 else 1.0
+    new_factor = 1 / lambda_max * factor if lambda_max != 0 else factor
     model.clear()
+    return lambda_max, new_factor
 
-    return lambda_max, scaling_factor
+
+def find_lambda_min_column(S, e_i, scaling_factor, fixed_values=None):
+    lambda_list = [i / 20 for i in range(1, 20)]
+    left = 0
+    right = len(lambda_list) - 1
+    feasible_lambda = None
+
+    while left <= right:
+        mid = (left + right) // 2
+        lam = lambda_list[mid]
+        try:
+            _ = cde_column(S, e_i, lam, scaling_factor, fixed_values)
+            feasible_lambda = lam
+            right = mid - 1
+        except RuntimeError:
+            left = mid + 1
+    return feasible_lambda
 
 
 def cde_column(S, e_i, _lambda_scaled, scaling_factor, fixed_values=None):
@@ -51,8 +102,6 @@ def cde_column(S, e_i, _lambda_scaled, scaling_factor, fixed_values=None):
 
     # Infinity norm constraints: -lambda <= (S[row,:] dot w) - e_i[row] <= lambda
     for row in range(p):
-        if np.all(S[row] == 0):
-            continue  # Skip rows with all zeros to avoid infeasibility
         lhs = model.sum(S[row, col] * w_vars[col] for col in range(p)) - e_i[row]
         model.add_constraint(lhs <= _lambda_scaled / scaling_factor)
         model.add_constraint(lhs >= -_lambda_scaled / scaling_factor)
@@ -63,6 +112,38 @@ def cde_column(S, e_i, _lambda_scaled, scaling_factor, fixed_values=None):
 
     solution = model.solve()
     if solution is None:
+        model.clear()
+        raise RuntimeError("No feasible solution found for column.")
+
+    beta = np.array([solution.get_value(wv) for wv in w_vars], dtype=float)
+    model.clear()
+    return beta
+
+
+def cde_column_v2(S, e_i, _lambda, lambda_max, lambda_min, fixed_values=None):
+    p = S.shape[0]
+    model = Model(name="CDE_col")
+    model.context.solver.log_output = False  # Hide solver logs
+
+    w_vars = model.continuous_var_list(p, lb=-model.infinity, name="beta")
+
+    obj_expr = model.sum(model.abs(w_vars[j]) for j in range(p))
+    model.minimize(obj_expr)
+    _lambda_scaled = lambda_min + ((lambda_max - lambda_min) * _lambda)
+
+    # Infinity norm constraints: -lambda <= (S[row,:] dot w) - e_i[row] <= lambda
+    for row in range(p):
+        lhs = model.sum(S[row, col] * w_vars[col] for col in range(p)) - e_i[row]
+        model.add_constraint(lhs <= _lambda_scaled)
+        model.add_constraint(lhs >= -_lambda_scaled)
+
+    if fixed_values is not None:
+        for j, val in fixed_values.items():
+            model.add_constraint(w_vars[j] == val)
+
+    solution = model.solve()
+    if solution is None:
+        model.clear()
         raise RuntimeError("No feasible solution found for column.")
 
     beta = np.array([solution.get_value(wv) for wv in w_vars], dtype=float)
@@ -74,9 +155,8 @@ def cde_columnwise_recursive(S, lambda_list):
     # TODO: For some reason greater lambda results in more sparsity
     p = S.shape[0]
     Theta_hat = np.zeros((p, p), dtype=float)
-    lambdas_used = {}
     for i in range(p):
-        print(f"Processing Column {i + 1}/{p}")
+        print(f"CDE Processing Column {i + 1}/{p}")
         e_i = np.zeros(p)
         e_i[i] = 1.0
 
@@ -84,38 +164,72 @@ def cde_columnwise_recursive(S, lambda_list):
         for j in range(i):
             fixed_dict[j] = Theta_hat[i, j]
 
-        lambda_max, scaling_factor = find_lambda_max_column(S, e_i, p)
+        lambda_max, scaling_factor = find_lambda_max_column(S, e_i, p, 1, fixed_dict)
+        lambda_min = lambda_max * find_lambda_min_column(
+            S, e_i, scaling_factor, fixed_dict
+        )
         if lambda_max <= 0:
-            pass
-            # raise Exception("Lambda_max=0!")
+            raise Exception("Lambda_max=0!")
 
-        lam = None
-        col_solved = False
-        for _lambda in lambda_list:
-            try:
-                beta_i = cde_column(S, e_i, _lambda, scaling_factor, fixed_dict)
-                if np.all(beta_i == 0):
-                    print(f"All zeros for column {i + 1}, lambda = {_lambda}")
-                    # raise SyntaxError
-                col_solved = True
-                lam = _lambda
-                # print(f"worked for lambda = {lam}")
-                break
-            except RuntimeError:
-                continue
-            except SyntaxError:
-                print("caught in zero loop")
-                raise RuntimeError
-        if col_solved:
-            lambdas_used[i + 1] = lam
-            if lam != lambda_list[0]:
-                print(f"Used different lambda = {lam}")
-            Theta_hat[:, i] = beta_i
+        if i == 0:
+            best_norm = 1e99
+            for _lambda in lambda_list:
+                beta_i = cde_column_v2(
+                    S, e_i, _lambda, lambda_max, lambda_min, fixed_dict
+                )
+                # pick best performing l2 norm
+                norm = np.linalg.norm(beta_i - true_Theta[:, i], 2) / np.linalg.norm(
+                    true_Theta[:, i], 2
+                )
+                if norm < best_norm:
+                    best_norm = norm
+                    lam = _lambda
+                    best_beta = beta_i
+            else:
+                print(f"lambda used: {lam}")
         else:
-            print(f"Column {i + 1} has no solution.")
-            raise RuntimeError
+            # best_beta = cde_column(S, e_i, lam, scaling_factor, fixed_dict)
+            best_beta = cde_column_v2(S, e_i, lam, lambda_max, lambda_min, fixed_dict)
+        Theta_hat[:, i] = best_beta
 
-    return Theta_hat, lambdas_used
+    return Theta_hat
+
+
+def clime(S, lambda_list):
+    p = S.shape[0]
+    Theta_hat = np.zeros((p, p), dtype=float)
+    for i in range(p):
+        print(f"CLIME Processing Column {i + 1}/{p}")
+        e_i = np.zeros(p)
+        e_i[i] = 1.0
+
+        lambda_max, scaling_factor = find_lambda_max_column(S, e_i, p, 1)
+        lambda_min = lambda_max * find_lambda_min_column(S, e_i, scaling_factor)
+
+        if lambda_max <= 0:
+            raise Exception("Lambda_max=0!")
+
+        if i == 0:
+            best_norm = 1e99
+            for _lambda in lambda_list:
+                beta_i = cde_column_v2(S, e_i, _lambda, lambda_max, lambda_min)
+                # pick best performing relative l2 norm
+                norm = np.linalg.norm(beta_i - true_Theta[:, i], 2) / np.linalg.norm(
+                    true_Theta[:, i], 2
+                )
+                if norm < best_norm:
+                    best_norm = norm
+                    lam = _lambda
+                    best_beta = beta_i
+            else:
+                print(f"lambda used: {lam}")
+        else:
+            best_beta = cde_column_v2(S, e_i, lam, lambda_max, lambda_min)
+
+        Theta_hat[:, i] = best_beta
+
+    Theta_hat = 0.5 * (Theta_hat + Theta_hat.T)
+    return Theta_hat
 
 
 def create_sparse_precision_matrix(p, sparsity=0.9, epsilon=1e-4):
@@ -161,25 +275,14 @@ def l1_norm_error(Theta_true, Theta_est):
     return np.sum(np.abs(Theta_true - Theta_est))
 
 
-def relative_spectral_norm_error(Theta_true, Theta_est):
-    return np.linalg.norm(Theta_true - Theta_est, 2) / np.linalg.norm(Theta_true, 2)
+def relative_frobenius_norm_error(Theta_true, Theta_est):
+    return np.linalg.norm(Theta_true - Theta_est, "fro") / np.linalg.norm(
+        Theta_true, "fro"
+    )
 
 
-def compute_support_metrics(Theta_true, Theta_est):
-    true_support = (np.abs(Theta_true) > 1e-12).astype(int)
-    est_support = (np.abs(Theta_est) > 1e-12).astype(int)
-
-    true_positives = np.sum((true_support == 1) & (est_support == 1))
-    false_positives = np.sum((true_support == 0) & (est_support == 1))
-    false_negatives = np.sum((true_support == 1) & (est_support == 0))
-    true_negatives = np.sum((true_support == 0) & (est_support == 0))
-
-    tpr = true_positives / (true_positives + false_negatives + 1e-8)
-    fpr = false_positives / (false_positives + true_negatives + 1e-8)
-
-    hamming_distance = np.sum(true_support != est_support)
-
-    return tpr, fpr, hamming_distance
+def relative_l1_norm_error(Theta_true, Theta_est):
+    return np.linalg.norm(Theta_true - Theta_est) / np.linalg.norm(Theta_true)
 
 
 def plot_sparsity_and_magnitude(Theta_true, Theta_est, p, n):
@@ -261,76 +364,93 @@ def plot_sparsity_and_magnitude(Theta_true, Theta_est, p, n):
 
 if __name__ == "__main__":
     # TODO: With reference to article (Jianqing Fan et al) using different lambda for each column CDE
-    # TODO: Due to the way symmetry is being imposed, the IC for lambda is very sensitive (chaos theory???)
     # TODO: Must be symmetric, PD, S * Theta = I. Symmetry is enforced directly in the problem
     # TODO: In theory, Theta_est is assympotically PD according to Cai et al (Jianqing Fan et al)
+    # TODO: If true theta is very sparse, clime and cde no diff since they only have entries along diagonal
 
-    # Using GPT's method of creating data for simulation study
     # Generate Theta, derive S, generate synthetic data from multivariate normal
     p = 250
     n = 125
-    sparsity = 0.98
+    sparsity = 0.90
 
     true_Theta = create_sparse_precision_matrix(p, sparsity, epsilon=1e-4)
     synthetic_data = generate_synthetic_data(true_Theta, n)
     S = np.cov(synthetic_data, rowvar=False)
-    lambda_list = np.linspace(2.5, 5, 20)
+    lambda_list = [i / 20 for i in range(21)]
 
     try:
-        est_Theta = np.load("synt_results_250_125_098.npy")
+        # est_Theta = cde_columnwise_recursive(S, lambda_list)
+        # est_Theta_clime = clime(S, lambda_list)
 
-        # est_Theta, lambdas = cde_columnwise_recursive(S, lambda_list)
-        # # np.save("synt_results_250_125_098.npy", est_Theta)
-        pass
+        est_Theta = np.load("precision_results_cde.npy")
+        est_Theta_clime = np.load("precision_results_clime.npy")
+
+        # np.save("precision_results_cde.npy", est_Theta)
+        # np.save("precision_results_clime.npy", est_Theta_clime)
+
     except Exception as e:
         print(e)
-        # response = requests.post(
-        #     f"https://ntfy.sh/firaz_python",
-        #     data="❌ Script Failed! Please check for errors.".encode("utf-8"),
-        #     headers={
-        #         "Title": "Script Failed".encode("utf-8").decode("latin-1"),
-        #         "Priority": "high",
-        #         "Tags": "cross,fire",
-        #         "Sound": "siren",
-        #     },
-        # )
+        response = requests.post(
+            f"https://ntfy.sh/firaz_python",
+            data="❌ Script Failed! Please check for errors.".encode("utf-8"),
+            headers={
+                "Title": "Script Failed".encode("utf-8").decode("latin-1"),
+                "Priority": "high",
+                "Tags": "cross,fire",
+                "Sound": "siren",
+            },
+        )
+        raise RuntimeError
     else:
-        # response = requests.post(
-        #     f"https://ntfy.sh/firaz_python",
-        #     data="✅ Script finished running".encode("utf-8"),
-        #     headers={
-        #         "Title": "Script Completed".encode("utf-8").decode("latin-1"),
-        #         "Priority": "high",
-        #         "Tags": "check",
-        #     },
-        # )
-        pass
+        response = requests.post(
+            f"https://ntfy.sh/firaz_python",
+            data="✅ Script finished running".encode("utf-8"),
+            headers={
+                "Title": "Script Completed".encode("utf-8").decode("latin-1"),
+                "Priority": "high",
+                "Tags": "check",
+            },
+        )
 
-    # Check est_Theta for positive definiteness
-    eigenvalues = eigvals(est_Theta)
-    if np.sum(np.abs(eigenvalues) <= 0) == 0:
-        print("Passed Positive Definite test")
+    if np.sum(np.abs(eigvals(est_Theta_clime)) <= 0) == 0:
+        print("CLIME Passed Positive Definite test")
     else:
-        print("Failed Positive Definite test")
+        print("CLIME Failed Positive Definite test")
 
-    # Metrics for checking accuracy of estimated theta against True data
+    if np.sum(np.abs(eigvals(est_Theta)) <= 0) == 0:
+        print("CDE Passed Positive Definite test")
+    else:
+        print("CDE Failed Positive Definite test")
+
+    frobenius_error = frobenius_norm_error(true_Theta, est_Theta_clime)
+    l1_error = l1_norm_error(true_Theta, est_Theta_clime)
+    relative_frobenius_error = relative_frobenius_norm_error(
+        true_Theta, est_Theta_clime
+    )
+    relative_l1_error = relative_l1_norm_error(true_Theta, est_Theta_clime)
+
+    print(f"CLIME Frobenius norm error: {frobenius_error:.4f}")
+    print(f"CLIME L1-Norm Error: {l1_error:.4f}")
+    print(f"CLIME Relative Frobenius Norm Error: {relative_frobenius_error:.4f}")
+    print(f"CLIME Relative L1-Norm Error: {relative_l1_error:.4f}")
+
     frobenius_error = frobenius_norm_error(true_Theta, est_Theta)
     l1_error = l1_norm_error(true_Theta, est_Theta)
-    rel_spectral_error = relative_spectral_norm_error(true_Theta, est_Theta)
-    tpr, fpr, hamming_dist = compute_support_metrics(true_Theta, est_Theta)
-    cond_number = np.linalg.cond(est_Theta)
+    relative_frobenius_error = relative_frobenius_norm_error(true_Theta, est_Theta)
+    relative_l1_error = relative_l1_norm_error(true_Theta, est_Theta)
 
-    print(f"Frobenius norm error: {frobenius_error:.4f}")
-    print(f"L1-Norm Error: {l1_error:.4f}")
-    print(f"Relative Spectral Norm Error: {rel_spectral_error:.4f}")
-    print(f"True Positive Rate (TPR): {tpr:.4f}")
-    print(f"False Positive Rate (FPR): {fpr:.4f}")
-    print(f"Hamming Distance: {hamming_dist}")
-    print(f"Condition Number: {cond_number:.4f}")
+    print(f"CDE Frobenius norm error: {frobenius_error:.4f}")
+    print(f"CDE L1-Norm Error: {l1_error:.4f}")
+    print(f"CDE Relative Frobenius Norm Error: {relative_frobenius_error:.4f}")
+    print(f"CDE Relative L1-Norm Error: {relative_l1_error:.4f}")
 
-    fig_sparsity, fig_magnitudes = plot_sparsity_and_magnitude(
+    fig_sparsity_cde, fig_magnitudes_cde = plot_sparsity_and_magnitude(
         true_Theta, est_Theta, p, n
     )
+    fig_sparsity_clime, fig_magnitudes_clime = plot_sparsity_and_magnitude(
+        true_Theta, est_Theta_clime, p, n
+    )
+
     # fig_sparsity.write_html("sparsity_plot.html")
     # fig_magnitudes.write_html("magnitude_plot.html")
     print("Done!")
