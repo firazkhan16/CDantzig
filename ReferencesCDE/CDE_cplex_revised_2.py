@@ -727,37 +727,61 @@ def CDE_DOcplex_with_eta_cv_iterateeta(list_df, scoring='sharpe'):
 
 
 if __name__ == '__main__':
+    # list_file = ['25_Portfolios_5x5.csv',
+    #              'Industry.csv',
+    #              'international.csv',
+    #              'SPSectors.csv']
+    #
+    # file_index = 1
+    # data = pd.read_csv(f'portfolio_backtester/data/{list_file[file_index]}', index_col='Date', parse_dates=True)
+    # RF = data.RF
+    # data = data.drop(columns=['RF'])
+    # window=120
+    #
+    # data_train=data.iloc[:window]
+    # data_test=data.iloc[window]
+    # w=CDE_DOcplex_with_eta_cv([data_train])
+
+
+    # p,n,model=400,126*4+1,'1'
+    # p,n,model=100, 127, '2'
+    # model='1'
+    # p,n=600,252*3+1
     model='2'
+    # p,n=100,127
+    # p,n=200,126*2+1
+    # p,n=400, 252*2+1
     p, n = 600, 252 * 3 + 1
+    #
     result_dic = {}
     portfolio_dic = {}
     lambda_list = [i / 20 for i in range(19, 0, -1)]
     for _lambda in lambda_list:
         portfolio_dic[_lambda] = []
 
-    # for counter in range(100):
-    data = pd.read_csv('simulation_data_sample.csv',
-                       index_col='Date',
-                       parse_dates=True)
-    sigma, eta, p, A, b, k = estimate_para(data.iloc[:-1], true_eta=True)
-    factor = 1
-    lambda_max, original_factor = find_lambda_max_cplex(sigma, eta, A, b, p, k, factor)
-    if lambda_max<=0:
-        raise Exception('Lambda_max=0!')
+    for counter in range(100):
+        data = pd.read_csv(f'simulation datasets/{model} simulation data {n}x{p} {counter + 1}.csv',
+                           index_col='Date',
+                           parse_dates=True)
+        sigma, eta, p, A, b, k = estimate_para(data.iloc[:-1], true_eta=True)
+        factor = 1
+        lambda_max, original_factor = find_lambda_max_cplex(sigma, eta, A, b, p, k, factor)
+        if lambda_max<=0:
+            raise Exception('Lambda_max=0!')
 
-    return_list = np.empty(len(lambda_list))
-    for index, _lambda in enumerate(lambda_list):
-        print(f'Optimizing {index}:{_lambda}')
-        w = CDE_DOcplex_phase1(sigma, eta, A, b, p, k, original_factor, _lambda)
+        return_list = np.empty(len(lambda_list))
+        for index, _lambda in enumerate(lambda_list):
+            print(f'Optimizing {index}:{_lambda}')
+            w = CDE_DOcplex_phase1(sigma, eta, A, b, p, k, original_factor, _lambda)
 
-        portfolio_dic[_lambda].append(w)
-        return_list[index] = data.iloc[-1].values @ w
-        # print(f'finished data {counter + 1}')
-        # result_dic[counter] = return_list
+            portfolio_dic[_lambda].append(w)
+            return_list[index] = data.iloc[-1].values @ w
+        print(f'finished data {counter + 1}')
+        result_dic[counter] = return_list
     result = pd.DataFrame.from_dict(result_dic)
     result.index = lambda_list
-    # result.to_csv(
-    #     f'results.csv')
+    result.to_csv(
+        f'simulation datasets/results/{model} simulation data {n}x{p}_100_CDE_fixed_lambda_b=1_default_tolerance_trueeta__results.csv')
     portfolios = pd.DataFrame.from_dict(portfolio_dic, orient='index')
     portfolios.to_csv(
         f'simulation datasets/results/{model} simulation data {n}x{p}_100_CDE_fixed_lambda_b=1_default_tolerance_trueeta_portfolios.csv')
