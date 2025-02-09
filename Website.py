@@ -470,3 +470,31 @@ if __name__ == "__main__":
         print(f"Error running script: {e}")
 
     print("Done!")
+
+
+import pandas as pd
+import numpy as np
+page_view_matrix = pd.read_csv(
+    r"ReferencesPaC/Page_View_Matrix_Example.csv", header=0, index_col=0
+)
+site_info = pd.read_csv(r"ReferencesPaC/500_Site_Info_Example.csv", header=0)
+
+n = len(page_view_matrix)
+p = len(page_view_matrix.columns)
+
+cost_per_thousand = site_info["Cost"].values
+tau = site_info["Pages"].values
+gamma = 1 / (cost_per_thousand * tau)
+
+# gradient at zero
+d_hat = (-1/n) * site_info["Clickthrough"].values * gamma * page_view_matrix.sum(axis=0).values
+
+# diagonal Hessian elements at zero
+H_hat = np.zeros((5000,500))
+H_diag = (1/n) * ((site_info["Clickthrough"].values)**2) * (gamma**2) * ((page_view_matrix * (page_view_matrix - 1)).sum(axis=0).values)
+
+for i in range(p):
+    H_hat[i, i] = H_diag[i]
+
+# YOU COMPUTED OFF DIAGONALS WRONGLY YOU DIMWIT
+# PARTIAL DIFF WRT TO BETA K NOT I
