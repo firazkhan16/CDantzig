@@ -5,6 +5,8 @@ from sklearn.model_selection import train_test_split
 from docplex.mp.model import Model
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
+from sklearn.preprocessing import StandardScaler
+import cvxpy as cp
 
 np.random.seed(123)
 
@@ -14,7 +16,9 @@ def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
     model.parameters.read.scale = -1
     model.parameters.lpmethod = 4
 
-    w = np.array(model.continuous_var_list([f'w{i}' for i in range(p)], lb=-model.infinity))
+    w = np.array(
+        model.continuous_var_list([f"w{i}" for i in range(p)], lb=-model.infinity)
+    )
 
     # Objective: minimize sum of abs(w[i])
     model.minimize(model.sum(model.abs(w[i]) for i in range(p)))
@@ -39,23 +43,25 @@ def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
     model.parameters.read.scale = -1
     model.parameters.lpmethod = 4
 
-    w = np.array(model.continuous_var_list([f'w{i}' for i in range(p)], lb=-model.infinity))
-    gamma = np.array(model.continuous_var_list([f'gamma{i}' for i in range(k)], lb=-model.infinity))
-    _lambda_scaled = model.continuous_var(name='lambda')
+    w = np.array(
+        model.continuous_var_list([f"w{i}" for i in range(p)], lb=-model.infinity)
+    )
+    gamma = np.array(
+        model.continuous_var_list([f"gamma{i}" for i in range(k)], lb=-model.infinity)
+    )
+    _lambda_scaled = model.continuous_var(name="lambda")
 
     model.minimize(_lambda_scaled)
 
     for i in range(p):
         expr = (
-            factor
-            * (model.dot(w, sigma.iloc[i, :]) - eta[i] + model.dot(gamma, A.T[i]))
+            factor * (model.dot(w, sigma[i]) - eta[i] + model.dot(gamma, A.T[i]))
             - _lambda_scaled
         )
         model.add_constraint(expr <= 0)
 
         expr = (
-            factor
-            * (model.dot(w, sigma.iloc[i, :]) - eta[i] + model.dot(gamma, A.T[i]))
+            factor * (model.dot(w, sigma[i]) - eta[i] + model.dot(gamma, A.T[i]))
             + _lambda_scaled
         )
         model.add_constraint(expr >= 0)
@@ -80,14 +86,15 @@ def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
 
 
 def CDE_DOcplex(sigma, eta, A, b, p, k, factor, _lambda_scaled):
-
     model = Model(name="CDE")
 
     # From Dechuan's reference code
     model.parameters.read.scale = -1
     model.parameters.lpmethod = 4
 
-    w = np.array(model.continuous_var_list([f"w{i}" for i in range(p)], lb=-model.infinity))
+    w = np.array(
+        model.continuous_var_list([f"w{i}" for i in range(p)], lb=-model.infinity)
+    )
     gamma = np.array(
         model.continuous_var_list([f"gamma{i}" for i in range(k)], lb=-model.infinity)
     )
@@ -99,15 +106,13 @@ def CDE_DOcplex(sigma, eta, A, b, p, k, factor, _lambda_scaled):
     # Infinity norm constraints:
     for row in range(p):
         expr = (
-            factor
-            * (model.dot(w, sigma.values[row]) - eta[row] + model.dot(gamma, A.T[row]))
+            factor * (model.dot(w, sigma[row]) - eta[row] + model.dot(gamma, A.T[row]))
             - _lambda_scaled
         )
         model.add_constraint(expr <= 0)
 
         expr = (
-            factor
-            * (model.dot(w, sigma.values[row]) - eta[row] + model.dot(gamma, A.T[row]))
+            factor * (model.dot(w, sigma[row]) - eta[row] + model.dot(gamma, A.T[row]))
             + _lambda_scaled
         )
         model.add_constraint(expr >= 0)
@@ -130,36 +135,19 @@ def CDE_DOcplex(sigma, eta, A, b, p, k, factor, _lambda_scaled):
         return "Error converging to a solution"
 
 
-def constrained_lasso(X, eta, A, b, p, k, lambda_value):
+def constrained_lasso_cvxpy(X, Y, A, b, lambda_value):
+    w = cp.Variable(X.shape[1])
 
-    model = Model("constrained_lasso")
+    objective = 0.5 * cp.sum_squares(Y - X @ w) + (lambda_value * cp.norm(w, 1))
+    constraints = [A @ w == b]
 
-    w = model.continuous_var_list(p, name="w", lb=-model.infinity)
-    n = len(eta)
+    problem = cp.Problem(cp.Minimize(objective), constraints)
+    problem.solve()
 
-    residual = [model.dot(w, X.values[i]) - eta[i] for i in range(n)]
-
-    quad_obj = model.sum(residual[i] * residual[i] for i in range(n)) * 0.5
-
-    l1_penalty = lambda_value * model.sum(model.abs(w[i]) for i in range(p))
-
-    model.minimize(quad_obj + l1_penalty)
-
-    for i in range(k):
-        model.add_constraint(model.dot(w, A[i]) == b[i])
-
-    solution = model.solve()
-    if solution is not None:
-        w_values = [solution.get_value(var) for var in w]
-        model.clear()
-        return np.array(w_values)
-    else:
-        model.clear()
-        return "Error converging to a solution"
+    return w.value
 
 
 def compute_reach_and_ctr(page_view_matrix, site_info, beta):
-
     pvm = page_view_matrix.copy()
     si = site_info.copy()
 
@@ -206,14 +194,8 @@ def compute_reach_and_ctr(page_view_matrix, site_info, beta):
 
 
 if __name__ == "__main__":
-    # TODO: So far CDE performs better when p >> n and CLasso performs better when n >> p
-    # TODO: Script uses 80-20 train-test data, K-fold seems infeasible if considering high dimension
-    # TODO: We have yet to consider demographic constraints
-    # TODO: CLasso has linear inequality but not sure if its needed
-
     try:
-        # p = 500 so n = 200 represents p >> n (high dim) while n = 1000 represents n >> p (classic)
-        sample_sizes = [946 , 2500]
+        sample_sizes = [946, 2500]
 
         reach_results = {757: {}, 2000: {}}
         ctr_results = {757: {}, 2000: {}}
@@ -225,7 +207,7 @@ if __name__ == "__main__":
         k = 1
 
         lambda_list_cde = [i / 20 for i in range(19, 0, -1)]
-        lambda_list_classo = np.linspace(0.000000000001, 1.0, 11)
+        lambda_list_classo = np.geomspace(0.01, 100, 20)
 
         page_view_matrix = pd.read_csv(
             r"ReferencesPaC/Page_View_Matrix_Example.csv", header=0, index_col=0
@@ -240,11 +222,53 @@ if __name__ == "__main__":
                 page_view_matrix_subset, test_size=0.2, random_state=2
             )
 
-            Y = train_matrix @ site_info['Clickthrough'].values
-            site_info['gamma'] = 1 / (site_info['Pages'] * site_info['Cost'])
-            scaling_factors = site_info['gamma'] * site_info['Clickthrough']
-            X = train_matrix.values * scaling_factors.values[np.newaxis, :]
-            X = pd.DataFrame(X, columns=train_matrix.columns, index=train_matrix.index)
+            cost_per_thousand = site_info["Cost"].values
+            tau = site_info["Pages"].values
+            gamma = 1 / (cost_per_thousand * tau)
+            CTR = site_info["Clickthrough"].values
+
+            d_hat = (
+                (-1 / len(train_matrix)) * CTR * gamma * train_matrix.sum(axis=0).values
+            )
+
+            H_hat = np.zeros((p, p))
+            H_diag = (
+                (1 / len(train_matrix))
+                * (CTR**2)
+                * (gamma**2)
+                * (train_matrix * (train_matrix - 1)).sum(axis=0).values
+            )
+
+            for i in range(p):
+                for j in range(i, p):
+                    if i == j:
+                        H_hat[i, i] = H_diag[i]
+                    else:
+                        H_hat[i, j] = (
+                            (1 / len(train_matrix))
+                            * gamma[i]
+                            * gamma[j]
+                            * CTR[i]
+                            * CTR[j]
+                            * (
+                                train_matrix.values[:, i] * train_matrix.values[:, j]
+                            ).sum()
+                        )
+                        H_hat[j, i] = H_hat[i, j]
+
+            U, D, V_T = np.linalg.svd(H_hat)
+
+            D_sqrt = np.diag(np.sqrt(D))
+
+            # X = D^(1/2) U^T
+            X = D_sqrt @ U.T
+
+            # Compute H_hat pseudo inverse
+            H_hat_inv = np.linalg.pinv(H_hat)
+
+            # Y = -X H_hat^-1 d_hat
+            Y = -X @ H_hat_inv @ d_hat
+
             sigma = 2 * X.T @ X
             eta = 2 * X.T @ Y
 
@@ -257,6 +281,8 @@ if __name__ == "__main__":
 
             for b in b_values:
                 print(f"Processing Budget: {b}")
+
+                # ===== CDE =====
                 lambda_max, original_factor = find_lambda_max_cplex(
                     sigma, eta, A, [b], p, k, factor
                 )
@@ -264,13 +290,13 @@ if __name__ == "__main__":
                 if lambda_max <= 0:
                     raise Exception("Lambda_max=0!")
 
-                # ===== CDE =====
                 best_w_cde = None
                 best_reach_cde, best_ctr_cde, best_lambda_cde = 0, 0, None
 
                 for _lambda in lambda_list_cde:
-                    w_cde = CDE_DOcplex(sigma, eta, A, [b], p, k, original_factor, _lambda
-                                        )
+                    w_cde = CDE_DOcplex(
+                        sigma, eta, A, [b], p, k, original_factor, _lambda
+                    )
 
                     if isinstance(w_cde, np.ndarray):
                         r_cde, c_cde = compute_reach_and_ctr(
@@ -287,18 +313,16 @@ if __name__ == "__main__":
                 reach_cde.append(best_reach_cde)
                 ctr_cde.append(best_ctr_cde)
                 print(f"Best Lambda for CDE: {best_lambda_cde}")
-                print(f"Best reach for CDE: {best_reach_cde}")
+                print(f"Best CR for CDE: {best_ctr_cde}")
 
                 # ===== CLasso =====
                 best_w_classo = None
                 best_reach_classo, best_ctr_classo, best_lambda_classo = 0, 0, None
 
-                # lambda_max = find_lambda_max_classo(X, Y, A, [b], p, k=1)
-
+                # TODO FIND LAMBDA MAX FOR CLASSO RANGE WILE BE TILL 0.1125
+                # TODO CLasso fails to produce sparse results regarless of lambda
                 for lambda_value in lambda_list_classo:
-                    w_classo = constrained_lasso(
-                        X, Y, A, [b], p, k, lambda_value
-                    )
+                    w_classo = constrained_lasso_cvxpy(X, Y, A, b, lambda_value)
                     if isinstance(w_classo, np.ndarray):
                         r_classo, c_classo = compute_reach_and_ctr(
                             test_matrix, site_info, w_classo
@@ -314,17 +338,16 @@ if __name__ == "__main__":
                 reach_classo.append(best_reach_classo)
                 ctr_classo.append(best_ctr_classo)
                 print(f"Best Lambda for CLasso: {best_lambda_classo}")
-                print(f"Best reach for CLasso: {best_reach_classo}")
-                # TODO FIND LAMBDA MAX FOR CLASSO RANGE WILE BE TILL 0.1125
+                print(f"Best CR for CLasso: {best_ctr_classo}")
 
                 # ===== Sparsity Comparison =====
                 if best_w_cde is not None:
-                    cde_sparsity = np.sum(np.abs(best_w_cde) > 1e-9)
+                    cde_sparsity = np.sum(np.abs(best_w_cde) > 1e-12)
                 else:
                     cde_sparsity = 0
 
                 if best_w_classo is not None:
-                    classo_sparsity = np.sum(np.abs(best_w_classo) > 1e-9)
+                    classo_sparsity = np.sum(np.abs(best_w_classo) > 1e-12)
                 else:
                     classo_sparsity = 0
 
@@ -338,19 +361,23 @@ if __name__ == "__main__":
         # results = []
         # for n in sample_sizes:
         #     for i, b in enumerate(b_values):
-        #         results.append({
-        #             "Sample Size (n)": n,
-        #             "Budget": b,
-        #             "Reach_CDE": reach_results[n]["CDE"][i],
-        #             "CTR_CDE": ctr_results[n]["CDE"][i],
-        #             "Sparsity_CDE": sparsity_results[n]["CDE"][i],
-        #             "Reach_CLasso": reach_results[n]["CLasso"][i],
-        #             "CTR_CLasso": ctr_results[n]["CLasso"][i],
-        #             "Sparsity_CLasso": sparsity_results[n]["CLasso"][i]
-        #         })
+        #         results.append(
+        #             {
+        #                 "Sample Size (n)": n,
+        #                 "Budget": b,
+        #                 "Reach_CDE": reach_results[n]["CDE"][i],
+        #                 "CTR_CDE": ctr_results[n]["CDE"][i],
+        #                 "Sparsity_CDE": sparsity_results[n]["CDE"][i],
+        #                 "Reach_CLasso": reach_results[n]["CLasso"][i],
+        #                 "CTR_CLasso": ctr_results[n]["CLasso"][i],
+        #                 "Sparsity_CLasso": sparsity_results[n]["CLasso"][i],
+        #             }
+        #         )
         #
         # results_df = pd.DataFrame(results)
-        # results_df.to_csv(f"cde_classo_results_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv", index=False)
+        # results_df.to_csv(
+        #     f"cde_classo_results_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv", index=False
+        # )
         # print("Results saved to CSV")
 
         # response = requests.post(
@@ -455,7 +482,6 @@ if __name__ == "__main__":
         fig.update_yaxes(title_text="")
         fig.show()
 
-
     except Exception as e:
         # response = requests.post(
         #     f"https://ntfy.sh/firaz_python",
@@ -470,31 +496,3 @@ if __name__ == "__main__":
         print(f"Error running script: {e}")
 
     print("Done!")
-
-
-import pandas as pd
-import numpy as np
-page_view_matrix = pd.read_csv(
-    r"ReferencesPaC/Page_View_Matrix_Example.csv", header=0, index_col=0
-)
-site_info = pd.read_csv(r"ReferencesPaC/500_Site_Info_Example.csv", header=0)
-
-n = len(page_view_matrix)
-p = len(page_view_matrix.columns)
-
-cost_per_thousand = site_info["Cost"].values
-tau = site_info["Pages"].values
-gamma = 1 / (cost_per_thousand * tau)
-
-# gradient at zero
-d_hat = (-1/n) * site_info["Clickthrough"].values * gamma * page_view_matrix.sum(axis=0).values
-
-# diagonal Hessian elements at zero
-H_hat = np.zeros((5000,500))
-H_diag = (1/n) * ((site_info["Clickthrough"].values)**2) * (gamma**2) * ((page_view_matrix * (page_view_matrix - 1)).sum(axis=0).values)
-
-for i in range(p):
-    H_hat[i, i] = H_diag[i]
-
-# YOU COMPUTED OFF DIAGONALS WRONGLY YOU DIMWIT
-# PARTIAL DIFF WRT TO BETA K NOT I
