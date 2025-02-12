@@ -5,6 +5,7 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 import requests
 from numpy.linalg import eigvals
+import pandas as pd
 
 np.random.seed(123)
 
@@ -368,88 +369,106 @@ if __name__ == "__main__":
     # TODO: In theory, Theta_est is assympotically PD according to Cai et al (Jianqing Fan et al)
     # TODO: If true theta is very sparse, clime and cde no diff since they only have entries along diagonal
 
-    # Generate Theta, derive S, generate synthetic data from multivariate normal
-    p = 250
-    n = 125
-    sparsity = 0.90
-
-    true_Theta = create_sparse_precision_matrix(p, sparsity, epsilon=1e-4)
-    synthetic_data = generate_synthetic_data(true_Theta, n)
-    S = np.cov(synthetic_data, rowvar=False)
-    lambda_list = [i / 20 for i in range(21)]
-
     try:
-        # est_Theta = cde_columnwise_recursive(S, lambda_list)
-        # est_Theta_clime = clime(S, lambda_list)
+        results = {}
 
-        est_Theta = np.load("precision_results_cde.npy")
-        est_Theta_clime = np.load("precision_results_clime.npy")
+        # for (p, n) in [(100, 127), (200, 253), (400, 505), (600, 757)]:
+        #     print(f"Sample size: {p}")
+        #     sparsity = 0.90
+        #     true_Theta = create_sparse_precision_matrix(p, sparsity, epsilon=1e-4)
+        #     synthetic_data = generate_synthetic_data(true_Theta, n)
 
-        # np.save("precision_results_cde.npy", est_Theta)
-        # np.save("precision_results_clime.npy", est_Theta_clime)
+        #     S = np.cov(synthetic_data, rowvar=False)
+        #     lambda_list = [i / 20 for i in range(21)]
+        #     est_Theta_cde = cde_columnwise_recursive(S, lambda_list)
+        #     est_Theta_clime = clime(S, lambda_list)
+        #     results[p] = {"cde": est_Theta_cde, "clime": est_Theta_clime, "true": true_Theta}
+
+        # save_dict = {
+        #     f"{key}_{subkey}": value for key, subdict in results.items() for subkey, value in subdict.items()
+        # }
+        # np.savez("PrecisionResults.npz", **save_dict)
+
+        loaded = np.load("PrecisionResults.npz")
+        for k in loaded.keys():
+            key, subkey = k.split("_")
+            key = int(key)  # Convert back to int
+            if key not in results:
+                results[key] = {}
+            results[key][subkey] = loaded[k]
 
     except Exception as e:
         print(e)
-        response = requests.post(
-            f"https://ntfy.sh/firaz_python",
-            data="❌ Script Failed! Please check for errors.".encode("utf-8"),
-            headers={
-                "Title": "Script Failed".encode("utf-8").decode("latin-1"),
-                "Priority": "high",
-                "Tags": "cross,fire",
-                "Sound": "siren",
-            },
-        )
+        # response = requests.post(
+        #     f"https://ntfy.sh/firaz_python",
+        #     data="❌ Script Failed! Please check for errors.".encode("utf-8"),
+        #     headers={
+        #         "Title": "Script Failed".encode("utf-8").decode("latin-1"),
+        #         "Priority": "high",
+        #         "Tags": "cross,fire",
+        #         "Sound": "siren",
+        #     },
+        # )
         raise RuntimeError
     else:
-        response = requests.post(
-            f"https://ntfy.sh/firaz_python",
-            data="✅ Script finished running".encode("utf-8"),
-            headers={
-                "Title": "Script Completed".encode("utf-8").decode("latin-1"),
-                "Priority": "high",
-                "Tags": "check",
-            },
+        # response = requests.post(
+        #     f"https://ntfy.sh/firaz_python",
+        #     data="✅ Script finished running".encode("utf-8"),
+        #     headers={
+        #         "Title": "Script Completed".encode("utf-8").decode("latin-1"),
+        #         "Priority": "high",
+        #         "Tags": "check",
+        #     },
+        # )
+        pass
+
+    data = []
+
+    for i in results:
+        est_Theta_cde, est_Theta_clime, true_Theta = (
+            results[i]["cde"],
+            results[i]["clime"],
+            results[i]["true"],
         )
 
-    if np.sum(np.abs(eigvals(est_Theta_clime)) <= 0) == 0:
-        print("CLIME Passed Positive Definite test")
-    else:
-        print("CLIME Failed Positive Definite test")
+        clime_pd_test = np.sum(np.abs(eigvals(est_Theta_clime)) <= 0) == 0
+        cde_pd_test = np.sum(np.abs(eigvals(est_Theta_cde)) <= 0) == 0
 
-    if np.sum(np.abs(eigvals(est_Theta)) <= 0) == 0:
-        print("CDE Passed Positive Definite test")
-    else:
-        print("CDE Failed Positive Definite test")
+        clime_metrics = {
+            "method": "CLIME",
+            "size": i,
+            "positive_definite": clime_pd_test,
+            "frobenius_error": frobenius_norm_error(true_Theta, est_Theta_clime),
+            "l1_error": l1_norm_error(true_Theta, est_Theta_clime),
+            "relative_frobenius_error": relative_frobenius_norm_error(
+                true_Theta, est_Theta_clime
+            ),
+            "relative_l1_error": relative_l1_norm_error(true_Theta, est_Theta_clime),
+        }
 
-    frobenius_error = frobenius_norm_error(true_Theta, est_Theta_clime)
-    l1_error = l1_norm_error(true_Theta, est_Theta_clime)
-    relative_frobenius_error = relative_frobenius_norm_error(
-        true_Theta, est_Theta_clime
-    )
-    relative_l1_error = relative_l1_norm_error(true_Theta, est_Theta_clime)
+        cde_metrics = {
+            "method": "CDE",
+            "size": i,
+            "positive_definite": cde_pd_test,
+            "frobenius_error": frobenius_norm_error(true_Theta, est_Theta_cde),
+            "l1_error": l1_norm_error(true_Theta, est_Theta_cde),
+            "relative_frobenius_error": relative_frobenius_norm_error(
+                true_Theta, est_Theta_cde
+            ),
+            "relative_l1_error": relative_l1_norm_error(true_Theta, est_Theta_cde),
+        }
 
-    print(f"CLIME Frobenius norm error: {frobenius_error:.4f}")
-    print(f"CLIME L1-Norm Error: {l1_error:.4f}")
-    print(f"CLIME Relative Frobenius Norm Error: {relative_frobenius_error:.4f}")
-    print(f"CLIME Relative L1-Norm Error: {relative_l1_error:.4f}")
+        data.append(clime_metrics)
+        data.append(cde_metrics)
 
-    frobenius_error = frobenius_norm_error(true_Theta, est_Theta)
-    l1_error = l1_norm_error(true_Theta, est_Theta)
-    relative_frobenius_error = relative_frobenius_norm_error(true_Theta, est_Theta)
-    relative_l1_error = relative_l1_norm_error(true_Theta, est_Theta)
+    df_results = pd.DataFrame(data)
 
-    print(f"CDE Frobenius norm error: {frobenius_error:.4f}")
-    print(f"CDE L1-Norm Error: {l1_error:.4f}")
-    print(f"CDE Relative Frobenius Norm Error: {relative_frobenius_error:.4f}")
-    print(f"CDE Relative L1-Norm Error: {relative_l1_error:.4f}")
-
-    fig_sparsity_cde, fig_magnitudes_cde = plot_sparsity_and_magnitude(
-        true_Theta, est_Theta, p, n
-    )
-    fig_sparsity_clime, fig_magnitudes_clime = plot_sparsity_and_magnitude(
-        true_Theta, est_Theta_clime, p, n
-    )
+    # fig_sparsity_cde, fig_magnitudes_cde = plot_sparsity_and_magnitude(
+    #     true_Theta, est_Theta, p, n
+    # )
+    # fig_sparsity_clime, fig_magnitudes_clime = plot_sparsity_and_magnitude(
+    #     true_Theta, est_Theta_clime, p, n
+    # )
 
     # fig_sparsity.write_html("sparsity_plot.html")
     # fig_magnitudes.write_html("magnitude_plot.html")
