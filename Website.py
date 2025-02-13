@@ -195,11 +195,12 @@ def compute_reach_and_ctr(page_view_matrix, site_info, beta):
 
 if __name__ == "__main__":
     try:
-        sample_sizes = [946, 2500]
+        # sample_sizes = [946, 2500]
+        sample_sizes = [300, 1250]
 
-        reach_results = {757: {}, 2000: {}}
-        ctr_results = {757: {}, 2000: {}}
-        sparsity_results = {757: {}, 2000: {}}
+        reach_results = {}
+        ctr_results = {}
+        sparsity_results = {}
 
         b_values = np.linspace(10, 500, 20)
         factor = 1.0
@@ -495,4 +496,139 @@ if __name__ == "__main__":
         # )
         print(f"Error running script: {e}")
 
-    print("Done!")
+        print("Done!")
+
+
+# Code to load and plot both dataframes
+# # Load the two CSV files
+# df2 = pd.read_csv("cde_classo_results_20250212_142551.csv")  # 240, 1000
+# df1 = pd.read_csv("cde_classo_results_20250213_010704.csv")  # 757, 2000
+#
+# df = pd.concat([df1, df2], ignore_index=True)
+#
+# # Unique sample sizes
+# sample_sizes = sorted(df["Sample Size (n)"].unique())
+#
+# # Define subplot layout (4 rows for sample sizes, 3 columns for metrics)
+# # Define subplot layout (4 rows for sample sizes, 3 columns for metrics)
+# fig = make_subplots(
+#     rows=4,
+#     cols=3,
+#     column_titles=["Reach", "Click Rate", "Sparsity"],  # Fixed column titles
+#     row_titles=[f"n={n}" for n in sample_sizes]  # Fixed row titles
+# )
+#
+# first_cde = True
+# first_classo = True
+#
+# # Loop through each sample size
+# for i, n in enumerate(sample_sizes, start=1):
+#     df_n = df[df["Sample Size (n)"] == n]
+#
+#     # Reach Plot (Column 1)
+#     fig.add_trace(
+#         go.Scatter(
+#             x=df_n["Budget"],
+#             y=df_n["Reach_CDE"],
+#             mode="lines+markers",
+#             name="CDE",
+#             line=dict(color="red"),
+#             legendgroup="CDE",
+#             showlegend=first_cde,
+#         ),
+#         row=i,
+#         col=1,
+#     )
+#     fig.add_trace(
+#         go.Scatter(
+#             x=df_n["Budget"],
+#             y=df_n["Reach_CLasso"],
+#             mode="lines+markers",
+#             name="CLasso",
+#             line=dict(color="black"),
+#             legendgroup="CLasso",
+#             showlegend=first_classo,
+#         ),
+#         row=i,
+#         col=1,
+#     )
+#
+#     # CTR Plot (Column 2)
+#     fig.add_trace(
+#         go.Scatter(
+#             x=df_n["Budget"],
+#             y=df_n["CTR_CDE"],
+#             mode="lines+markers",
+#             name="CDE",
+#             line=dict(color="red"),
+#             legendgroup="CDE",
+#             showlegend=False,
+#         ),
+#         row=i,
+#         col=2,
+#     )
+#     fig.add_trace(
+#         go.Scatter(
+#             x=df_n["Budget"],
+#             y=df_n["CTR_CLasso"],
+#             mode="lines+markers",
+#             name="CLasso",
+#             line=dict(color="black"),
+#             legendgroup="CLasso",
+#             showlegend=False,
+#         ),
+#         row=i,
+#         col=2,
+#     )
+#
+#     # Sparsity Plot (Column 3)
+#     fig.add_trace(
+#         go.Scatter(
+#             x=df_n["Budget"],
+#             y=df_n["Sparsity_CDE"],
+#             mode="lines+markers",
+#             name="CDE",
+#             line=dict(color="red"),
+#             legendgroup="CDE",
+#             showlegend=False,
+#         ),
+#         row=i,
+#         col=3,
+#     )
+#     fig.add_trace(
+#         go.Scatter(
+#             x=df_n["Budget"],
+#             y=df_n["Sparsity_CLasso"],
+#             mode="lines+markers",
+#             name="CLasso",
+#             line=dict(color="black"),
+#             legendgroup="CLasso",
+#             showlegend=False,
+#         ),
+#         row=i,
+#         col=3,
+#     )
+#
+#     # Disable legend display for subsequent traces
+#     first_cde = False
+#     first_classo = False
+#
+# # Update Layout
+# fig.update_layout(
+#     title_text="CDE vs. CLasso Performance Across Sample Sizes",
+#     height=1500,
+#     showlegend=True,
+# )
+#
+# # Remove Y-Axis Labels
+# for i in range(1, 4):
+#     fig.update_yaxes(title_text="", row=1, col=i)
+#     fig.update_yaxes(title_text="", row=2, col=i)
+#     fig.update_yaxes(title_text="", row=3, col=i)
+#     fig.update_yaxes(title_text="", row=4, col=i)
+#
+# # Set X-Axis Label
+# fig.update_xaxes(title_text="Budget")
+#
+# # Show plot
+# fig.show()

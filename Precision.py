@@ -372,30 +372,31 @@ if __name__ == "__main__":
     try:
         results = {}
 
-        # for (p, n) in [(100, 127), (200, 253), (400, 505), (600, 757)]:
-        #     print(f"Sample size: {p}")
-        #     sparsity = 0.90
-        #     true_Theta = create_sparse_precision_matrix(p, sparsity, epsilon=1e-4)
-        #     synthetic_data = generate_synthetic_data(true_Theta, n)
+        for (p, n) in [(100, 127), (200, 253), (400, 505), (125, 100), (250,125)]:
+            print(f"Sample size: {p}")
+            sparsity = 0.90
+            true_Theta = create_sparse_precision_matrix(p, sparsity, epsilon=1e-4)
+            synthetic_data = generate_synthetic_data(true_Theta, n)
 
-        #     S = np.cov(synthetic_data, rowvar=False)
-        #     lambda_list = [i / 20 for i in range(21)]
-        #     est_Theta_cde = cde_columnwise_recursive(S, lambda_list)
-        #     est_Theta_clime = clime(S, lambda_list)
-        #     results[p] = {"cde": est_Theta_cde, "clime": est_Theta_clime, "true": true_Theta}
+            S = np.cov(synthetic_data, rowvar=False)
+            lambda_list = [i / 20 for i in range(21)]
+            est_Theta_cde = cde_columnwise_recursive(S, lambda_list)
+            est_Theta_clime = clime(S, lambda_list)
+            results[p] = {"cde": est_Theta_cde, "clime": est_Theta_clime, "true": true_Theta}
 
         # save_dict = {
         #     f"{key}_{subkey}": value for key, subdict in results.items() for subkey, value in subdict.items()
         # }
         # np.savez("PrecisionResults.npz", **save_dict)
 
-        loaded = np.load("PrecisionResults.npz")
-        for k in loaded.keys():
-            key, subkey = k.split("_")
-            key = int(key)  # Convert back to int
-            if key not in results:
-                results[key] = {}
-            results[key][subkey] = loaded[k]
+        # loaded = np.load("PrecisionResults.npz")
+        # loaded = np.load("PrecisionResultsHD.npz")
+        # for k in loaded.keys():
+        #     key, subkey = k.split("_")
+        #     key = int(key)  # Convert back to int
+        #     if key not in results:
+        #         results[key] = {}
+        #     results[key][subkey] = loaded[k]
 
     except Exception as e:
         print(e)
