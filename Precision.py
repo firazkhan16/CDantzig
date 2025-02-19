@@ -283,7 +283,7 @@ def relative_frobenius_norm_error(Theta_true, Theta_est):
 
 
 def relative_l1_norm_error(Theta_true, Theta_est):
-    return np.linalg.norm(Theta_true - Theta_est) / np.linalg.norm(Theta_true)
+    return np.sum(np.abs(Theta_true - Theta_est)) / np.sum(np.abs(Theta_true))
 
 
 def plot_sparsity_and_magnitude(Theta_true, Theta_est, p, n):
