@@ -195,8 +195,7 @@ def compute_reach_and_ctr(page_view_matrix, site_info, beta):
 
 if __name__ == "__main__":
     try:
-        # sample_sizes = [946, 2500]
-        sample_sizes = [300, 1250]
+        sample_sizes = [300, 946, 1250, 2500]
 
         reach_results = {}
         ctr_results = {}
@@ -208,7 +207,7 @@ if __name__ == "__main__":
         k = 1
 
         lambda_list_cde = [i / 20 for i in range(19, 0, -1)]
-        lambda_list_classo = np.geomspace(0.01, 100, 20)
+        lambda_list_classo = [i / 20 for i in range(19, 0, -1)]
 
         page_view_matrix = pd.read_csv(
             r"ReferencesPaC/Page_View_Matrix_Example.csv", header=0, index_col=0
@@ -323,7 +322,7 @@ if __name__ == "__main__":
                 # TODO FIND LAMBDA MAX FOR CLASSO RANGE WILE BE TILL 0.1125
                 # TODO CLasso fails to produce sparse results regarless of lambda
                 for lambda_value in lambda_list_classo:
-                    w_classo = constrained_lasso_cvxpy(X, Y, A, b, lambda_value)
+                    w_classo = constrained_lasso_cvxpy(X, Y, A, b, lambda_value * lambda_max)
                     if isinstance(w_classo, np.ndarray):
                         r_classo, c_classo = compute_reach_and_ctr(
                             test_matrix, site_info, w_classo
