@@ -5,8 +5,8 @@ from sklearn.model_selection import train_test_split
 from docplex.mp.model import Model
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
-from sklearn.preprocessing import StandardScaler
 import cvxpy as cp
+from sklearn.preprocessing import StandardScaler
 
 np.random.seed(123)
 
@@ -322,7 +322,9 @@ if __name__ == "__main__":
                 # TODO FIND LAMBDA MAX FOR CLASSO RANGE WILE BE TILL 0.1125
                 # TODO CLasso fails to produce sparse results regarless of lambda
                 for lambda_value in lambda_list_classo:
-                    w_classo = constrained_lasso_cvxpy(X, Y, A, b, lambda_value * lambda_max)
+                    w_classo = constrained_lasso_cvxpy(
+                        X, Y, A, b, lambda_value * lambda_max
+                    )
                     if isinstance(w_classo, np.ndarray):
                         r_classo, c_classo = compute_reach_and_ctr(
                             test_matrix, site_info, w_classo
@@ -358,23 +360,23 @@ if __name__ == "__main__":
             ctr_results[n] = {"CDE": ctr_cde, "CLasso": ctr_classo}
             sparsity_results[n] = {"CDE": sparsity_cde, "CLasso": sparsity_classo}
 
-        # results = []
-        # for n in sample_sizes:
-        #     for i, b in enumerate(b_values):
-        #         results.append(
-        #             {
-        #                 "Sample Size (n)": n,
-        #                 "Budget": b,
-        #                 "Reach_CDE": reach_results[n]["CDE"][i],
-        #                 "CTR_CDE": ctr_results[n]["CDE"][i],
-        #                 "Sparsity_CDE": sparsity_results[n]["CDE"][i],
-        #                 "Reach_CLasso": reach_results[n]["CLasso"][i],
-        #                 "CTR_CLasso": ctr_results[n]["CLasso"][i],
-        #                 "Sparsity_CLasso": sparsity_results[n]["CLasso"][i],
-        #             }
-        #         )
-        #
-        # results_df = pd.DataFrame(results)
+        results = []
+        for n in sample_sizes:
+            for i, b in enumerate(b_values):
+                results.append(
+                    {
+                        "Sample Size (n)": n,
+                        "Budget": b,
+                        "Reach_CDE": reach_results[n]["CDE"][i],
+                        "CTR_CDE": ctr_results[n]["CDE"][i],
+                        "Sparsity_CDE": sparsity_results[n]["CDE"][i],
+                        "Reach_CLasso": reach_results[n]["CLasso"][i],
+                        "CTR_CLasso": ctr_results[n]["CLasso"][i],
+                        "Sparsity_CLasso": sparsity_results[n]["CLasso"][i],
+                    }
+                )
+
+        results_df = pd.DataFrame(results)
         # results_df.to_csv(
         #     f"cde_classo_results_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv", index=False
         # )
@@ -391,37 +393,40 @@ if __name__ == "__main__":
         # )
 
         fig = make_subplots(
-            rows=2,
+            rows=4,
             cols=3,
-            subplot_titles=[
-                "Reach (n=757)",
-                "Click Rate (n=757)",
-                "Sparsity (n=757)",
-                "Reach (n=2000)",
-                "Click Rate (n=2000)",
-                "Sparsity (n=2000)",
-            ],
+            column_titles=["Reach (log-scaled)", "Click Rate (log-scaled)", "Sparsity"],
+            row_titles=[f"n={n}" for n in sample_sizes],
         )
+
+        first_cde = True
+        first_classo = True
 
         for i, n in enumerate(sample_sizes, start=1):
+            df_n = results_df[results_df["Sample Size (n)"] == n]
+
             fig.add_trace(
                 go.Scatter(
-                    x=b_values,
-                    y=reach_results[n]["CDE"],
+                    x=df_n["Budget"],
+                    y=df_n["Reach_CDE"],
                     mode="lines+markers",
-                    name=f"CDE - Reach (n={n})",
+                    name="CDE",
                     line=dict(color="red"),
+                    legendgroup="CDE",
+                    showlegend=first_cde,
                 ),
                 row=i,
                 col=1,
             )
             fig.add_trace(
                 go.Scatter(
-                    x=b_values,
-                    y=reach_results[n]["CLasso"],
+                    x=df_n["Budget"],
+                    y=df_n["Reach_CLasso"],
                     mode="lines+markers",
-                    name=f"CLasso - Reach (n={n})",
+                    name="CLasso",
                     line=dict(color="black"),
+                    legendgroup="CLasso",
+                    showlegend=first_classo,
                 ),
                 row=i,
                 col=1,
@@ -429,22 +434,26 @@ if __name__ == "__main__":
 
             fig.add_trace(
                 go.Scatter(
-                    x=b_values,
-                    y=ctr_results[n]["CDE"],
+                    x=df_n["Budget"],
+                    y=df_n["CTR_CDE"],
                     mode="lines+markers",
-                    name=f"CDE - CTR (n={n})",
+                    name="CDE",
                     line=dict(color="red"),
+                    legendgroup="CDE",
+                    showlegend=False,
                 ),
                 row=i,
                 col=2,
             )
             fig.add_trace(
                 go.Scatter(
-                    x=b_values,
-                    y=ctr_results[n]["CLasso"],
+                    x=df_n["Budget"],
+                    y=df_n["CTR_CLasso"],
                     mode="lines+markers",
-                    name=f"CLasso - CTR (n={n})",
+                    name="CLasso",
                     line=dict(color="black"),
+                    legendgroup="CLasso",
+                    showlegend=False,
                 ),
                 row=i,
                 col=2,
@@ -452,34 +461,51 @@ if __name__ == "__main__":
 
             fig.add_trace(
                 go.Scatter(
-                    x=b_values,
-                    y=sparsity_results[n]["CDE"],
+                    x=df_n["Budget"],
+                    y=df_n["Sparsity_CDE"],
                     mode="lines+markers",
-                    name=f"CDE - Sparsity (n={n})",
+                    name="CDE",
                     line=dict(color="red"),
+                    legendgroup="CDE",
+                    showlegend=False,
                 ),
                 row=i,
                 col=3,
             )
             fig.add_trace(
                 go.Scatter(
-                    x=b_values,
-                    y=sparsity_results[n]["CLasso"],
+                    x=df_n["Budget"],
+                    y=df_n["Sparsity_CLasso"],
                     mode="lines+markers",
-                    name=f"CLasso - Sparsity (n={n})",
+                    name="CLasso",
                     line=dict(color="black"),
+                    legendgroup="CLasso",
+                    showlegend=False,
                 ),
                 row=i,
                 col=3,
             )
+
+            first_cde = False
+            first_classo = False
+
+            fig.update_yaxes(type="log", row=i, col=1)
+            fig.update_yaxes(type="log", row=i, col=2)
 
         fig.update_layout(
-            title_text="CDE and CLasso Performance for Different Sample Sizes (n=757, 2000)",
-            height=900,
-            showlegend=False,
+            title_text="CDE vs. CLasso Performance Across Sample Sizes",
+            height=1500,
+            showlegend=True,
         )
+
+        for i in range(1, 4):
+            fig.update_yaxes(title_text="", row=1, col=i)
+            fig.update_yaxes(title_text="", row=2, col=i)
+            fig.update_yaxes(title_text="", row=3, col=i)
+            fig.update_yaxes(title_text="", row=4, col=i)
+
         fig.update_xaxes(title_text="Budget")
-        fig.update_yaxes(title_text="")
+
         fig.show()
 
     except Exception as e:
@@ -496,138 +522,3 @@ if __name__ == "__main__":
         print(f"Error running script: {e}")
 
         print("Done!")
-
-
-# Code to load and plot both dataframes
-# # Load the two CSV files
-# df2 = pd.read_csv("cde_classo_results_20250212_142551.csv")  # 240, 1000
-# df1 = pd.read_csv("cde_classo_results_20250213_010704.csv")  # 757, 2000
-#
-# df = pd.concat([df1, df2], ignore_index=True)
-#
-# # Unique sample sizes
-# sample_sizes = sorted(df["Sample Size (n)"].unique())
-#
-# # Define subplot layout (4 rows for sample sizes, 3 columns for metrics)
-# # Define subplot layout (4 rows for sample sizes, 3 columns for metrics)
-# fig = make_subplots(
-#     rows=4,
-#     cols=3,
-#     column_titles=["Reach", "Click Rate", "Sparsity"],  # Fixed column titles
-#     row_titles=[f"n={n}" for n in sample_sizes]  # Fixed row titles
-# )
-#
-# first_cde = True
-# first_classo = True
-#
-# # Loop through each sample size
-# for i, n in enumerate(sample_sizes, start=1):
-#     df_n = df[df["Sample Size (n)"] == n]
-#
-#     # Reach Plot (Column 1)
-#     fig.add_trace(
-#         go.Scatter(
-#             x=df_n["Budget"],
-#             y=df_n["Reach_CDE"],
-#             mode="lines+markers",
-#             name="CDE",
-#             line=dict(color="red"),
-#             legendgroup="CDE",
-#             showlegend=first_cde,
-#         ),
-#         row=i,
-#         col=1,
-#     )
-#     fig.add_trace(
-#         go.Scatter(
-#             x=df_n["Budget"],
-#             y=df_n["Reach_CLasso"],
-#             mode="lines+markers",
-#             name="CLasso",
-#             line=dict(color="black"),
-#             legendgroup="CLasso",
-#             showlegend=first_classo,
-#         ),
-#         row=i,
-#         col=1,
-#     )
-#
-#     # CTR Plot (Column 2)
-#     fig.add_trace(
-#         go.Scatter(
-#             x=df_n["Budget"],
-#             y=df_n["CTR_CDE"],
-#             mode="lines+markers",
-#             name="CDE",
-#             line=dict(color="red"),
-#             legendgroup="CDE",
-#             showlegend=False,
-#         ),
-#         row=i,
-#         col=2,
-#     )
-#     fig.add_trace(
-#         go.Scatter(
-#             x=df_n["Budget"],
-#             y=df_n["CTR_CLasso"],
-#             mode="lines+markers",
-#             name="CLasso",
-#             line=dict(color="black"),
-#             legendgroup="CLasso",
-#             showlegend=False,
-#         ),
-#         row=i,
-#         col=2,
-#     )
-#
-#     # Sparsity Plot (Column 3)
-#     fig.add_trace(
-#         go.Scatter(
-#             x=df_n["Budget"],
-#             y=df_n["Sparsity_CDE"],
-#             mode="lines+markers",
-#             name="CDE",
-#             line=dict(color="red"),
-#             legendgroup="CDE",
-#             showlegend=False,
-#         ),
-#         row=i,
-#         col=3,
-#     )
-#     fig.add_trace(
-#         go.Scatter(
-#             x=df_n["Budget"],
-#             y=df_n["Sparsity_CLasso"],
-#             mode="lines+markers",
-#             name="CLasso",
-#             line=dict(color="black"),
-#             legendgroup="CLasso",
-#             showlegend=False,
-#         ),
-#         row=i,
-#         col=3,
-#     )
-#
-#     # Disable legend display for subsequent traces
-#     first_cde = False
-#     first_classo = False
-#
-# # Update Layout
-# fig.update_layout(
-#     title_text="CDE vs. CLasso Performance Across Sample Sizes",
-#     height=1500,
-#     showlegend=True,
-# )
-#
-# # Remove Y-Axis Labels
-# for i in range(1, 4):
-#     fig.update_yaxes(title_text="", row=1, col=i)
-#     fig.update_yaxes(title_text="", row=2, col=i)
-#     fig.update_yaxes(title_text="", row=3, col=i)
-#     fig.update_yaxes(title_text="", row=4, col=i)
-#
-# # Set X-Axis Label
-# fig.update_xaxes(title_text="Budget")
-#
-# # Show plot
-# fig.show()
