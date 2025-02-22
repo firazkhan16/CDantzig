@@ -1,4 +1,3 @@
-import requests
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -6,7 +5,7 @@ from docplex.mp.model import Model
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 import cvxpy as cp
-from sklearn.preprocessing import StandardScaler
+import requests
 
 np.random.seed(123)
 
@@ -319,8 +318,6 @@ if __name__ == "__main__":
                 best_w_classo = None
                 best_reach_classo, best_ctr_classo, best_lambda_classo = 0, 0, None
 
-                # TODO FIND LAMBDA MAX FOR CLASSO RANGE WILE BE TILL 0.1125
-                # TODO CLasso fails to produce sparse results regarless of lambda
                 for lambda_value in lambda_list_classo:
                     w_classo = constrained_lasso_cvxpy(
                         X, Y, A, b, lambda_value * lambda_max

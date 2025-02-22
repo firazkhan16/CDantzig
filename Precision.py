@@ -3,9 +3,9 @@ from scipy.stats import multivariate_normal
 from docplex.mp.model import Model
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
-import requests
 from numpy.linalg import eigvals
 import pandas as pd
+import requests
 
 np.random.seed(123)
 
@@ -153,9 +153,8 @@ def cde_column_v2(S, e_i, _lambda, lambda_max, lambda_min, fixed_values=None):
 
 
 def cde_columnwise_recursive(S, lambda_list):
-    # TODO: For some reason greater lambda results in more sparsity
     p = S.shape[0]
-    Theta_hat = np.zeros((p, p), dtype=float)
+    Omega_hat = np.zeros((p, p), dtype=float)
     for i in range(p):
         print(f"CDE Processing Column {i + 1}/{p}")
         e_i = np.zeros(p)
@@ -163,7 +162,7 @@ def cde_columnwise_recursive(S, lambda_list):
 
         fixed_dict = {}
         for j in range(i):
-            fixed_dict[j] = Theta_hat[i, j]
+            fixed_dict[j] = Omega_hat[i, j]
 
         lambda_max, scaling_factor = find_lambda_max_column(S, e_i, p, 1, fixed_dict)
         lambda_min = lambda_max * find_lambda_min_column(
@@ -179,8 +178,8 @@ def cde_columnwise_recursive(S, lambda_list):
                     S, e_i, _lambda, lambda_max, lambda_min, fixed_dict
                 )
                 # pick best performing l2 norm
-                norm = np.linalg.norm(beta_i - true_Theta[:, i], 2) / np.linalg.norm(
-                    true_Theta[:, i], 2
+                norm = np.linalg.norm(beta_i - true_Omega[:, i], 2) / np.linalg.norm(
+                    true_Omega[:, i], 2
                 )
                 if norm < best_norm:
                     best_norm = norm
@@ -189,16 +188,15 @@ def cde_columnwise_recursive(S, lambda_list):
             else:
                 print(f"lambda used: {lam}")
         else:
-            # best_beta = cde_column(S, e_i, lam, scaling_factor, fixed_dict)
             best_beta = cde_column_v2(S, e_i, lam, lambda_max, lambda_min, fixed_dict)
-        Theta_hat[:, i] = best_beta
+        Omega_hat[:, i] = best_beta
 
-    return Theta_hat
+    return Omega_hat
 
 
 def clime(S, lambda_list):
     p = S.shape[0]
-    Theta_hat = np.zeros((p, p), dtype=float)
+    Omega_hat = np.zeros((p, p), dtype=float)
     for i in range(p):
         print(f"CLIME Processing Column {i + 1}/{p}")
         e_i = np.zeros(p)
@@ -215,8 +213,8 @@ def clime(S, lambda_list):
             for _lambda in lambda_list:
                 beta_i = cde_column_v2(S, e_i, _lambda, lambda_max, lambda_min)
                 # pick best performing relative l2 norm
-                norm = np.linalg.norm(beta_i - true_Theta[:, i], 2) / np.linalg.norm(
-                    true_Theta[:, i], 2
+                norm = np.linalg.norm(beta_i - true_Omega[:, i], 2) / np.linalg.norm(
+                    true_Omega[:, i], 2
                 )
                 if norm < best_norm:
                     best_norm = norm
@@ -227,68 +225,66 @@ def clime(S, lambda_list):
         else:
             best_beta = cde_column_v2(S, e_i, lam, lambda_max, lambda_min)
 
-        Theta_hat[:, i] = best_beta
+        Omega_hat[:, i] = best_beta
 
-    Theta_hat = 0.5 * (Theta_hat + Theta_hat.T)
-    return Theta_hat
+    Omega_hat = 0.5 * (Omega_hat + Omega_hat.T)
+    return Omega_hat
 
 
-def create_sparse_precision_matrix(p, sparsity=0.9, epsilon=1e-4):
-    Theta = np.zeros((p, p))
-
-    # Fill diagonal with large positive values to ensure positive definiteness
+def generate_omega_model1(p):
+    Omega = np.zeros((p, p))
     for i in range(p):
-        Theta[i, i] = (
-            np.random.uniform(1, 2) + epsilon
-        )  # Add small epsilon to ensure positivity
+        for j in range(p):
+            Omega[i, j] = 0.6 ** abs(i - j)
+    return Omega
 
-    # Introduce off-diagonal sparsity
+
+def generate_omega_model2(p):
+    B = np.zeros((p, p))
     for i in range(p):
         for j in range(i + 1, p):
-            if (
-                np.random.rand() > sparsity
-            ):  # Only add non-zero with probability (1 - sparsity)
-                value = np.random.uniform(-0.5, 0.5)
-                Theta[i, j] = value
-                Theta[j, i] = value  # Ensure symmetry
+            B[i, j] = 0.5 if np.random.rand() < 0.1 else 0
+            B[j, i] = B[i, j]
 
-    # Ensure the matrix is positive definite
-    eigvals = np.linalg.eigvalsh(Theta)
-    if np.any(eigvals <= 0):
-        min_eigval = np.min(eigvals)
-        Theta += np.eye(p) * (abs(min_eigval) + epsilon)
+    eigenvalues = np.linalg.eigvalsh(B)
+    lambda_max, lambda_min = max(eigenvalues), min(eigenvalues)
+    delta = (lambda_max - p * lambda_min) / (p - 1)
+    Omega = B + delta * np.eye(p)
 
-    return Theta
+    v = 1 / np.sqrt(np.diag(Omega))
+    standardized_Omega = Omega * np.outer(v, v)
+
+    return standardized_Omega
 
 
-def generate_synthetic_data(Theta, n):
-    p = Theta.shape[0]
-    Sigma = np.linalg.inv(Theta + np.eye(p))  # Add small regularization to the inverse
+def generate_synthetic_data(Omega, n):
+    p = Omega.shape[0]
+    Sigma = np.linalg.inv(Omega)
     X = multivariate_normal.rvs(mean=np.zeros(p), cov=Sigma, size=n)
     return X
 
 
-def frobenius_norm_error(Theta_true, Theta_est):
-    return np.linalg.norm(Theta_true - Theta_est, "fro")
+def frobenius_norm_error(Omega_true, Omega_est):
+    return np.linalg.norm(Omega_true - Omega_est, "fro")
 
 
-def l1_norm_error(Theta_true, Theta_est):
-    return np.sum(np.abs(Theta_true - Theta_est))
+def l1_norm_error(Omega_true, Omega_est):
+    return np.sum(np.abs(Omega_true - Omega_est))
 
 
-def relative_frobenius_norm_error(Theta_true, Theta_est):
-    return np.linalg.norm(Theta_true - Theta_est, "fro") / np.linalg.norm(
-        Theta_true, "fro"
+def relative_frobenius_norm_error(Omega_true, Omega_est):
+    return np.linalg.norm(Omega_true - Omega_est, "fro") / np.linalg.norm(
+        Omega_true, "fro"
     )
 
 
-def relative_l1_norm_error(Theta_true, Theta_est):
-    return np.sum(np.abs(Theta_true - Theta_est)) / np.sum(np.abs(Theta_true))
+def relative_l1_norm_error(Omega_true, Omega_est):
+    return np.sum(np.abs(Omega_true - Omega_est)) / np.sum(np.abs(Omega_true))
 
 
-def plot_sparsity_and_magnitude(Theta_true, Theta_est, p, n):
-    true_support = (np.abs(Theta_true) > 1e-12).astype(int)
-    est_support = (np.abs(Theta_est) > 1e-12).astype(int)
+def plot_sparsity_and_magnitude(Omega_true, Omega_est, p, n):
+    true_support = (np.abs(Omega_true) > 1e-12).astype(int)
+    est_support = (np.abs(Omega_est) > 1e-12).astype(int)
 
     fig_sparsity = make_subplots(
         rows=1,
@@ -332,7 +328,7 @@ def plot_sparsity_and_magnitude(Theta_true, Theta_est, p, n):
 
     fig_magnitudes.add_trace(
         go.Heatmap(
-            z=Theta_true[::-1],
+            z=Omega_true[::-1],
             colorscale="RdBu",
             zmid=0,
             colorbar=dict(title="Magnitude"),
@@ -342,7 +338,7 @@ def plot_sparsity_and_magnitude(Theta_true, Theta_est, p, n):
     )
     fig_magnitudes.add_trace(
         go.Heatmap(
-            z=Theta_est[::-1],
+            z=Omega_est[::-1],
             colorscale="RdBu",
             zmid=0,
             colorbar=dict(title="Magnitude"),
@@ -364,39 +360,56 @@ def plot_sparsity_and_magnitude(Theta_true, Theta_est, p, n):
 
 
 if __name__ == "__main__":
-    # TODO: With reference to article (Jianqing Fan et al) using different lambda for each column CDE
-    # TODO: Must be symmetric, PD, S * Theta = I. Symmetry is enforced directly in the problem
-    # TODO: In theory, Theta_est is assympotically PD according to Cai et al (Jianqing Fan et al)
-    # TODO: If true theta is very sparse, clime and cde no diff since they only have entries along diagonal
-
     try:
-        results = {}
-
-        for (p, n) in [(100, 127), (200, 253), (400, 505), (125, 100), (250,125)]:
-            print(f"Sample size: {p}")
-            sparsity = 0.90
-            true_Theta = create_sparse_precision_matrix(p, sparsity, epsilon=1e-4)
-            synthetic_data = generate_synthetic_data(true_Theta, n)
-
-            S = np.cov(synthetic_data, rowvar=False)
-            lambda_list = [i / 20 for i in range(21)]
-            est_Theta_cde = cde_columnwise_recursive(S, lambda_list)
-            est_Theta_clime = clime(S, lambda_list)
-            results[p] = {"cde": est_Theta_cde, "clime": est_Theta_clime, "true": true_Theta}
+        # results = {}
+        #
+        # for p, n in [(30, 100), (60, 100), (90, 100), (120, 100), (200, 100)]:
+        #     lambda_list = [i / 20 for i in range(21)]
+        #
+        #     for model_name, generate_omega in [
+        #         ("Model 1", generate_omega_model1),
+        #         ("Model 2", generate_omega_model2),
+        #     ]:
+        #         print(f"p = {p}, {model_name}")
+        #         true_Omega = generate_omega(p)
+        #         synthetic_data = generate_synthetic_data(true_Omega, n)
+        #
+        #         S = np.cov(synthetic_data, rowvar=False)
+        #         est_Omega_cde = cde_columnwise_recursive(S, lambda_list)
+        #         est_Omega_clime = clime(S, lambda_list)
+        #
+        #         if p not in results:
+        #             results[p] = {}
+        #
+        #         results[p][model_name] = {
+        #             "cde": est_Omega_cde,
+        #             "clime": est_Omega_clime,
+        #             "true": true_Omega,
+        #         }
 
         # save_dict = {
-        #     f"{key}_{subkey}": value for key, subdict in results.items() for subkey, value in subdict.items()
+        #     f"{p}_{model_name}_{method}": Omega
+        #     for p, models in results.items()
+        #     for model_name, estimations in models.items()
+        #     for method, Omega in estimations.items()
         # }
-        # np.savez("PrecisionResults.npz", **save_dict)
+        #
+        # np.savez("PrecisionResultsFinal.npz", **save_dict)
 
-        # loaded = np.load("PrecisionResults.npz")
-        # loaded = np.load("PrecisionResultsHD.npz")
-        # for k in loaded.keys():
-        #     key, subkey = k.split("_")
-        #     key = int(key)  # Convert back to int
-        #     if key not in results:
-        #         results[key] = {}
-        #     results[key][subkey] = loaded[k]
+        loaded = np.load("PrecisionResultsFinal.npz")
+
+        loaded_results = {}
+        for key in loaded.keys():
+            p, model_name, method = key.split("_", maxsplit=2)
+            p = int(p)
+
+            if p not in loaded_results:
+                loaded_results[p] = {}
+            if model_name not in loaded_results[p]:
+                loaded_results[p][model_name] = {}
+
+            loaded_results[p][model_name][method] = loaded[key]
+        results = loaded_results
 
     except Exception as e:
         print(e)
@@ -425,52 +438,48 @@ if __name__ == "__main__":
 
     data = []
 
-    for i in results:
-        est_Theta_cde, est_Theta_clime, true_Theta = (
-            results[i]["cde"],
-            results[i]["clime"],
-            results[i]["true"],
-        )
+    for p, models in results.items():
+        for model_name, estimations in models.items():
+            est_Omega_cde, est_Omega_clime, true_Omega = (
+                estimations["cde"],
+                estimations["clime"],
+                estimations["true"],
+            )
 
-        clime_pd_test = np.sum(np.abs(eigvals(est_Theta_clime)) <= 0) == 0
-        cde_pd_test = np.sum(np.abs(eigvals(est_Theta_cde)) <= 0) == 0
+            clime_pd_test = np.sum(np.abs(eigvals(est_Omega_clime)) <= 0) == 0
+            cde_pd_test = np.sum(np.abs(eigvals(est_Omega_cde)) <= 0) == 0
 
-        clime_metrics = {
-            "method": "CLIME",
-            "size": i,
-            "positive_definite": clime_pd_test,
-            "frobenius_error": frobenius_norm_error(true_Theta, est_Theta_clime),
-            "l1_error": l1_norm_error(true_Theta, est_Theta_clime),
-            "relative_frobenius_error": relative_frobenius_norm_error(
-                true_Theta, est_Theta_clime
-            ),
-            "relative_l1_error": relative_l1_norm_error(true_Theta, est_Theta_clime),
-        }
+            clime_metrics = {
+                "model": model_name,
+                "method": "CLIME",
+                "size": p,
+                "positive_definite": clime_pd_test,
+                "frobenius_error": frobenius_norm_error(true_Omega, est_Omega_clime),
+                "l1_error": l1_norm_error(true_Omega, est_Omega_clime),
+                "relative_frobenius_error": relative_frobenius_norm_error(
+                    true_Omega, est_Omega_clime
+                ),
+                "relative_l1_error": relative_l1_norm_error(
+                    true_Omega, est_Omega_clime
+                ),
+            }
 
-        cde_metrics = {
-            "method": "CDE",
-            "size": i,
-            "positive_definite": cde_pd_test,
-            "frobenius_error": frobenius_norm_error(true_Theta, est_Theta_cde),
-            "l1_error": l1_norm_error(true_Theta, est_Theta_cde),
-            "relative_frobenius_error": relative_frobenius_norm_error(
-                true_Theta, est_Theta_cde
-            ),
-            "relative_l1_error": relative_l1_norm_error(true_Theta, est_Theta_cde),
-        }
+            cde_metrics = {
+                "model": model_name,
+                "method": "CDE",
+                "size": p,
+                "positive_definite": cde_pd_test,
+                "frobenius_error": frobenius_norm_error(true_Omega, est_Omega_cde),
+                "l1_error": l1_norm_error(true_Omega, est_Omega_cde),
+                "relative_frobenius_error": relative_frobenius_norm_error(
+                    true_Omega, est_Omega_cde
+                ),
+                "relative_l1_error": relative_l1_norm_error(true_Omega, est_Omega_cde),
+            }
 
-        data.append(clime_metrics)
-        data.append(cde_metrics)
+            data.append(clime_metrics)
+            data.append(cde_metrics)
 
     df_results = pd.DataFrame(data)
 
-    # fig_sparsity_cde, fig_magnitudes_cde = plot_sparsity_and_magnitude(
-    #     true_Theta, est_Theta, p, n
-    # )
-    # fig_sparsity_clime, fig_magnitudes_clime = plot_sparsity_and_magnitude(
-    #     true_Theta, est_Theta_clime, p, n
-    # )
-
-    # fig_sparsity.write_html("sparsity_plot.html")
-    # fig_magnitudes.write_html("magnitude_plot.html")
     print("Done!")
