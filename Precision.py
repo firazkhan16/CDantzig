@@ -282,6 +282,21 @@ def relative_l1_norm_error(Omega_true, Omega_est):
     return np.sum(np.abs(Omega_true - Omega_est)) / np.sum(np.abs(Omega_true))
 
 
+def compute_tpr_fpr(true_Omega, est_Omega):
+    true_support = (np.abs(true_Omega) > 1e-12).astype(int)
+    est_support = (np.abs(est_Omega) > 1e-12).astype(int)
+
+    TP = np.sum((true_support == 1) & (est_support == 1))
+    FP = np.sum((true_support == 0) & (est_support == 1))
+    TN = np.sum((true_support == 0) & (est_support == 0))
+    FN = np.sum((true_support == 1) & (est_support == 0))
+
+    tpr = TP / (TP + FN) if (TP + FN) > 0 else 0
+    fpr = FP / (FP + TN) if (FP + TN) > 0 else 0
+
+    return tpr, fpr
+
+
 def plot_sparsity_and_magnitude(Omega_true, Omega_est, p, n):
     true_support = (np.abs(Omega_true) > 1e-12).astype(int)
     est_support = (np.abs(Omega_est) > 1e-12).astype(int)
@@ -446,8 +461,11 @@ if __name__ == "__main__":
                 estimations["true"],
             )
 
-            clime_pd_test = np.sum(np.abs(eigvals(est_Omega_clime)) <= 0) == 0
-            cde_pd_test = np.sum(np.abs(eigvals(est_Omega_cde)) <= 0) == 0
+            clime_pd_test = np.sum(np.abs(np.linalg.eigvals(est_Omega_clime)) <= 0) == 0
+            cde_pd_test = np.sum(np.abs(np.linalg.eigvals(est_Omega_cde)) <= 0)
+
+            clime_tpr, clime_fpr = compute_tpr_fpr(true_Omega, est_Omega_clime)
+            cde_tpr, cde_fpr = compute_tpr_fpr(true_Omega, est_Omega_cde)
 
             clime_metrics = {
                 "model": model_name,
@@ -459,9 +477,9 @@ if __name__ == "__main__":
                 "relative_frobenius_error": relative_frobenius_norm_error(
                     true_Omega, est_Omega_clime
                 ),
-                "relative_l1_error": relative_l1_norm_error(
-                    true_Omega, est_Omega_clime
-                ),
+                "relative_l1_error": relative_l1_norm_error(true_Omega, est_Omega_clime),
+                "TPR": clime_tpr,
+                "FPR": clime_fpr
             }
 
             cde_metrics = {
@@ -475,6 +493,8 @@ if __name__ == "__main__":
                     true_Omega, est_Omega_cde
                 ),
                 "relative_l1_error": relative_l1_norm_error(true_Omega, est_Omega_cde),
+                "TPR": cde_tpr,
+                "FPR": cde_fpr
             }
 
             data.append(clime_metrics)
