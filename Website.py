@@ -25,7 +25,7 @@ def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
     # Add linear equality constraints A w = b
     for i in range(k):
         expr = model.dot(w, A[i])
-        model.add_constraint(expr == b[i])
+        model.add_constraint(expr <= b[i])
 
     solution = model.solve()
     if solution is None or model.solve_status.value != 2:
@@ -67,7 +67,7 @@ def find_lambda_max_cplex(sigma, eta, A, b, p, k, factor=1.0):
 
     for i in range(k):
         expr = model.dot(w, A[i])
-        model.add_constraint(expr == b[i])
+        model.add_constraint(expr <= b[i])
 
     expr = model.sum(model.abs(w[i]) for i in range(p))
     model.add_constraint(expr == lp1_norm)
@@ -119,7 +119,7 @@ def CDE_DOcplex(sigma, eta, A, b, p, k, factor, _lambda_scaled):
     # Equality constraints A w = b
     for i in range(k):
         expr = model.dot(w, A[i])
-        model.add_constraint(expr == b[i])
+        model.add_constraint(expr <= b[i])
 
     # Not needed if A is set to row vector of ones
     # model.add_constraint(model.sum(w[i] for i in range(p)) == 1)
@@ -270,20 +270,47 @@ if __name__ == "__main__":
 
             sigma = 2 * X.T @ X
             eta = 2 * X.T @ Y
+            A = np.ones((1, p))
+
+            # My transform with D^-1/2
+            diag_vals = np.diag(sigma).copy()
+            D_inv_sqrt = np.diag(1.0 / np.sqrt(diag_vals))
+            sigma_scaled = sigma @ D_inv_sqrt
+            eta_scaled = eta
+            A_scaled = A @ D_inv_sqrt
+
+            # diag_vals = np.diag(sigma).copy()
+            # D_sqrt = np.diag(np.sqrt(diag_vals))
+            # D_inv_sqrt = np.diag(1.0 / np.sqrt(diag_vals))
+            # sigma_scaled = D_inv_sqrt @ sigma @ D_inv_sqrt
+            # eta_scaled = D_inv_sqrt @ eta
+            # A_scaled = A @ D_sqrt
+
 
             reach_cde, ctr_cde = [], []
             reach_classo, ctr_classo = [], []
 
             sparsity_cde, sparsity_classo = [], []
 
-            A = np.ones((1, p))
-
             for b in b_values:
+                # TODO: tried scaling of sigma didnt work, tried dechuans advice to change lambda_max scale didnt work
+                # TODO: tried changing matrix constraint to lin ineq to impose non-neg constraints and not feasible
+                # TODO: figure out why high magnitudes of pos and neg
+
+                # # change of constraints
+                # A_nonneg = -np.eye(p)
+                # b_nonneg = np.zeros(p)
+                # A_budget = np.ones((1, p))
+                # b_budget = np.array([b])
+                # A = np.vstack([A_nonneg, A_budget])
+                # b = np.concatenate([b_nonneg, b_budget])
+                # k = p + 1
+
                 print(f"Processing Budget: {b}")
 
                 # ===== CDE =====
                 lambda_max, original_factor = find_lambda_max_cplex(
-                    sigma, eta, A, [b], p, k, factor
+                    sigma, eta, A, b, p, k, factor
                 )
 
                 if lambda_max <= 0:
@@ -294,8 +321,19 @@ if __name__ == "__main__":
 
                 for _lambda in lambda_list_cde:
                     w_cde = CDE_DOcplex(
-                        sigma, eta, A, [b], p, k, original_factor, _lambda
+                        sigma_scaled,
+                        eta,
+                        A,
+                        b,
+                        p,
+                        k,
+                        1,
+                        _lambda,
                     )
+
+                    w_cde = D_inv_sqrt @ w_cde
+
+                    # w_cde = (D_sqrt @ w_cde.reshape(-1, 1)).ravel()
 
                     if isinstance(w_cde, np.ndarray):
                         r_cde, c_cde = compute_reach_and_ctr(
@@ -518,4 +556,4 @@ if __name__ == "__main__":
         # )
         print(f"Error running script: {e}")
 
-        print("Done!")
+    print("Done!")
