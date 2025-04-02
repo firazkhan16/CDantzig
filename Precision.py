@@ -6,6 +6,7 @@ from plotly.subplots import make_subplots
 from numpy.linalg import eigvals
 import pandas as pd
 import requests
+import time
 
 np.random.seed(123)
 
@@ -227,8 +228,129 @@ def clime(S, lambda_list):
 
         Omega_hat[:, i] = best_beta
 
-    Omega_hat = 0.5 * (Omega_hat + Omega_hat.T)
+    for i in range(p):
+        for j in range(i + 1, p):
+            if np.abs(Omega_hat[i, j]) <= np.abs(Omega_hat[j, i]):
+                Omega_hat[j, i] = Omega_hat[i, j]
+            else:
+                Omega_hat[i, j] = Omega_hat[j, i]
+
+    # Omega_hat = 0.5 * (Omega_hat + Omega_hat.T)
+
     return Omega_hat
+
+
+def cde_new(S, lambda_scaled):
+    p = S.shape[0]
+    start_time = time.time()
+    model = Model(name="CDE")
+
+    W = {
+        (i, j): model.continuous_var(lb=-model.infinity, name=f"w_{i}_{j}")
+        for i in range(p)
+        for j in range(p)
+    }
+
+    obj_expr = model.sum(model.abs(W[(i, j)]) for i in range(p) for j in range(p))
+    model.minimize(obj_expr)
+
+    for i in range(p):
+        for r in range(p):
+            # Compute the dot product: (Sigma[r,:] dot W[:,i])
+            lhs = model.sum(S[r, j] * W[(j, i)] for j in range(p))
+            # Subtract the i-th column of identity: 1 if r == i, else 0.
+            target = 1.0 if r == i else 0.0
+            lhs = lhs - target
+            model.add_constraint(lhs <= lambda_scaled)
+            model.add_constraint(lhs >= -lambda_scaled)
+
+    for i in range(p):
+        for j in range(i + 1, p):
+            model.add_constraint(W[(i, j)] == W[(j, i)])
+
+    solution = model.solve()
+    print("--- %s seconds ---" % (time.time() - start_time))
+    if solution is None:
+        model.clear()
+        return "No feasible solution found for the precision matrix."
+
+    W_est = np.zeros((p, p))
+    for i in range(p):
+        for j in range(p):
+            W_est[i, j] = solution.get_value(W[(i, j)])
+
+    return W_est
+
+
+def find_lambda_max_new(S, p, factor):
+    model = Model("lp1")
+    model.parameters.read.scale = -1
+    model.parameters.lpmethod = 4
+
+    W = {
+        (i, j): model.continuous_var(lb=-model.infinity, name=f"w_{i}_{j}")
+        for i in range(p)
+        for j in range(p)
+    }
+
+    # Objective: minimize sum of absolute values of all entries of W
+    obj_expr = model.sum(model.abs(W[(i, j)]) for i in range(p) for j in range(p))
+    model.minimize(obj_expr)
+
+    # Add symmetry constraints: W[i,j] = W[j,i] for all i<j.
+    for i in range(p):
+        for j in range(i + 1, p):
+            model.add_constraint(W[(i, j)] == W[(j, i)])
+
+    solution = model.solve()
+    if solution is None or model.solve_status.value != 2:
+        model.clear()
+        raise Exception(
+            "Infeasible lp1: Could not find a feasible solution to the baseline problem."
+        )
+
+    lp1_norm = solution.get_objective_value()
+    model.clear()
+
+    model = Model("lp2")
+    model.parameters.read.scale = -1
+    model.parameters.lpmethod = 4
+    model.context.solver.log_output = False
+
+    W = {
+        (i, j): model.continuous_var(lb=-model.infinity, name=f"w_{i}_{j}")
+        for i in range(p)
+        for j in range(p)
+    }
+    lambda_var = model.continuous_var(name="lambda")
+
+    model.minimize(lambda_var)
+
+    for i in range(p):
+        for r in range(p):
+            lhs = model.sum(S[r, j] * W[(j, i)] for j in range(p))
+            target = 1.0 if r == i else 0.0
+            lhs = lhs - target
+            model.add_constraint(lhs <= lambda_var)
+            model.add_constraint(lhs >= -lambda_var)
+
+    # Apply symmetry constraints
+    for i in range(p):
+        for j in range(i + 1, p):
+            model.add_constraint(W[(i, j)] == W[(j, i)])
+
+    expr = model.sum(model.abs(W[(i, j)]) for i in range(p) for j in range(p))
+    model.add_constraint(expr == lp1_norm)
+
+    solution = model.solve()
+    if solution is None or model.solve_status.value != 2:
+        model.clear()
+        raise Exception("Infeasible lp2: Could not find a feasible lambda.")
+
+    lambda_max = solution.get_value(lambda_var)
+    new_factor = (1 / lambda_max * factor) if lambda_max != 0 else factor
+    model.clear()
+    return lambda_max, new_factor
 
 
 def generate_omega_model1(p):
@@ -297,83 +419,6 @@ def compute_tpr_fpr(true_Omega, est_Omega):
     return tpr, fpr
 
 
-def plot_sparsity_and_magnitude(Omega_true, Omega_est, p, n):
-    true_support = (np.abs(Omega_true) > 1e-12).astype(int)
-    est_support = (np.abs(Omega_est) > 1e-12).astype(int)
-
-    fig_sparsity = make_subplots(
-        rows=1,
-        cols=2,
-        subplot_titles=("True Sparsity Pattern", "Estimated Sparsity Pattern"),
-    )
-
-    fig_sparsity.add_trace(
-        go.Heatmap(
-            z=true_support[::-1],
-            colorscale="Blues",
-            showscale=False,
-        ),
-        row=1,
-        col=1,
-    )
-    fig_sparsity.add_trace(
-        go.Heatmap(
-            z=est_support[::-1],
-            colorscale="Blues",
-            showscale=False,
-        ),
-        row=1,
-        col=2,
-    )
-
-    fig_sparsity.update_layout(
-        title_text=f"Sparsity Patterns of Precision Matrices (p = {p}, n = {n})",
-    )
-    fig_sparsity.update_xaxes(title_text="Index")
-    fig_sparsity.update_yaxes(title_text="Index (reversed)")
-
-    fig_magnitudes = make_subplots(
-        rows=1,
-        cols=2,
-        subplot_titles=(
-            "True Precision Matrix (Magnitudes)",
-            "Estimated Precision Matrix (Magnitudes)",
-        ),
-    )
-
-    fig_magnitudes.add_trace(
-        go.Heatmap(
-            z=Omega_true[::-1],
-            colorscale="RdBu",
-            zmid=0,
-            colorbar=dict(title="Magnitude"),
-        ),
-        row=1,
-        col=1,
-    )
-    fig_magnitudes.add_trace(
-        go.Heatmap(
-            z=Omega_est[::-1],
-            colorscale="RdBu",
-            zmid=0,
-            colorbar=dict(title="Magnitude"),
-        ),
-        row=1,
-        col=2,
-    )
-
-    fig_magnitudes.update_layout(
-        title_text=f"Magnitudes of Precision Matrices (p = {p}, n = {n})",
-    )
-    fig_magnitudes.update_xaxes(title_text="Index")
-    fig_magnitudes.update_yaxes(title_text="Index (reversed)")
-
-    fig_sparsity.show()
-    fig_magnitudes.show()
-
-    return fig_sparsity, fig_magnitudes
-
-
 if __name__ == "__main__":
     try:
         # results = {}
@@ -401,7 +446,44 @@ if __name__ == "__main__":
         #             "clime": est_Omega_clime,
         #             "true": true_Omega,
         #         }
+        results = {}
 
+        for p, n in [(20, 40), (40, 40), (60, 40), (80, 40)]:
+            lambda_list_clime = [i / 50 for i in range(51)]
+            lambda_list_cde = reversed([i / 50 for i in range(51)])
+
+            for model_name, generate_omega in [
+                ("Model 1", generate_omega_model1),
+                ("Model 2", generate_omega_model2),
+            ]:
+                print(f"p = {p}, {model_name}")
+                true_Omega = generate_omega(p)
+                synthetic_data = generate_synthetic_data(true_Omega, n)
+                S = np.cov(synthetic_data, rowvar=False)
+
+                cde_error = 1e99
+                for _lambda in lambda_list_cde:
+                    est_Omega_cde1 = cde_new(S, _lambda)
+                    if isinstance(est_Omega_cde1, np.ndarray):
+                        e = relative_frobenius_norm_error(true_Omega, est_Omega_cde1)
+                        if e < cde_error:
+                            est_Omega_cde = est_Omega_cde1.copy()
+                            cde_error = e
+                            best_lambda = _lambda
+                    else:
+                        break
+                print(f"best lambda CDE is:{best_lambda}")
+
+                est_Omega_clime = clime(S, lambda_list_clime)
+
+                if p not in results:
+                    results[p] = {}
+
+                results[p][model_name] = {
+                    "cde": est_Omega_cde,
+                    "clime": est_Omega_clime,
+                    "true": true_Omega,
+                }
         # save_dict = {
         #     f"{p}_{model_name}_{method}": Omega
         #     for p, models in results.items()
@@ -410,21 +492,21 @@ if __name__ == "__main__":
         # }
         #
         # np.savez("PrecisionResultsFinal.npz", **save_dict)
-
-        loaded = np.load("PrecisionResultsFinal.npz")
-
-        loaded_results = {}
-        for key in loaded.keys():
-            p, model_name, method = key.split("_", maxsplit=2)
-            p = int(p)
-
-            if p not in loaded_results:
-                loaded_results[p] = {}
-            if model_name not in loaded_results[p]:
-                loaded_results[p][model_name] = {}
-
-            loaded_results[p][model_name][method] = loaded[key]
-        results = loaded_results
+        #
+        # loaded = np.load("PrecisionResultsFinal1.npz")
+        #
+        # loaded_results = {}
+        # for key in loaded.keys():
+        #     p, model_name, method = key.split("_", maxsplit=2)
+        #     p = int(p)
+        #
+        #     if p not in loaded_results:
+        #         loaded_results[p] = {}
+        #     if model_name not in loaded_results[p]:
+        #         loaded_results[p][model_name] = {}
+        #
+        #     loaded_results[p][model_name][method] = loaded[key]
+        # results = loaded_results
 
     except Exception as e:
         print(e)
@@ -462,7 +544,7 @@ if __name__ == "__main__":
             )
 
             clime_pd_test = np.sum(np.abs(np.linalg.eigvals(est_Omega_clime)) <= 0) == 0
-            cde_pd_test = np.sum(np.abs(np.linalg.eigvals(est_Omega_cde)) <= 0)
+            cde_pd_test = np.sum(np.abs(np.linalg.eigvals(est_Omega_cde)) <= 0) == 0
 
             clime_tpr, clime_fpr = compute_tpr_fpr(true_Omega, est_Omega_clime)
             cde_tpr, cde_fpr = compute_tpr_fpr(true_Omega, est_Omega_cde)
@@ -477,9 +559,11 @@ if __name__ == "__main__":
                 "relative_frobenius_error": relative_frobenius_norm_error(
                     true_Omega, est_Omega_clime
                 ),
-                "relative_l1_error": relative_l1_norm_error(true_Omega, est_Omega_clime),
+                "relative_l1_error": relative_l1_norm_error(
+                    true_Omega, est_Omega_clime
+                ),
                 "TPR": clime_tpr,
-                "FPR": clime_fpr
+                "FPR": clime_fpr,
             }
 
             cde_metrics = {
@@ -494,7 +578,7 @@ if __name__ == "__main__":
                 ),
                 "relative_l1_error": relative_l1_norm_error(true_Omega, est_Omega_cde),
                 "TPR": cde_tpr,
-                "FPR": cde_fpr
+                "FPR": cde_fpr,
             }
 
             data.append(clime_metrics)
