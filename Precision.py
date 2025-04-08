@@ -10,7 +10,6 @@ import requests
 import time
 from sklearn.model_selection import KFold
 
-np.random.seed(123)
 
 
 def find_lambda_max_cde_v1(S, e_i, p, factor, fixed_values=None):
@@ -260,7 +259,7 @@ def cde_v2(S, _lambda):
     # print("--- %s seconds ---" % (time.time() - start_time))
     if solution is None:
         model.clear()
-        return "No feasible solution found for the precision matrix."
+        raise RuntimeError("No feasible solution found for column.")
 
     W_est = np.zeros((p, p))
     for i in range(p):
@@ -341,16 +340,25 @@ if __name__ == "__main__":
         results = {}
         lambda_list = [i / 20 for i in range(20)]
 
-        for p, n in [(20, 50), (40, 50), (60, 50), (80, 50)]:
+        # for p, n in [(20, 50), (40, 50), (60, 50), (80, 50)]:
+        # for p, n in [(20, 50), (20, 35), (20, 20), (20, 10)]:
+        for p, n in [
+            # (20, 50),
+            (20, 35),
+            (20, 20),
+            (20, 10)
+        ]:
             condition_key = f"p_{p}_n_{n}"
             results[condition_key] = {}
+            np.random.seed(123)
 
             I = np.eye(p)
             for model_name, generate_omega in [
-                # ("Model 1", generate_omega_model1),
-                ("Model 2", generate_omega_model2),
+                ("Model 1", generate_omega_model1),
+                # ("Model 2", generate_omega_model2),
             ]:
-                print(f"p = {p}, {model_name}")
+                # print(f"p = {p}, {model_name}")
+                print(f"n = {n}, {model_name}")
                 stored_Omega = {}
                 for count in range(100):
                     print(f"count = {count}")
@@ -445,11 +453,14 @@ if __name__ == "__main__":
                         "true": true_Omega,
                     }
                     print("--- %s seconds ---" % (time.time() - start_time))
+                    np.savez(f"Omega_model_1_{n}.npz", results=stored_Omega)
 
                 results[condition_key][model_name] = stored_Omega
-                np.savez("results_checkpoint_Model2.npz", results=results)
+                np.savez("Checkpoint_model_1.npz", results=results)
 
-            np.savez(f"results_model_2_{p}.npz", results=results)
+            np.savez(f"results_model_1_n_is_{n}.npz", results=results)
+
+        np.savez(f"results_model_1.npz", results=results)
 
     except Exception as e:
         print(e)
