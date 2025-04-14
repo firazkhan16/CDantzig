@@ -269,6 +269,69 @@ def cde_v2(S, _lambda):
     return W_est
 
 
+def find_lambda_min_cde_v3(S):
+    lambda_list = [i / 20 for i in range(1, 20)]
+    left = 0
+    right = len(lambda_list) - 1
+    feasible_lambda = None
+
+    while left <= right:
+        mid = (left + right) // 2
+        lam = lambda_list[mid]
+        try:
+            _ = cde_v3(S, lam)
+            feasible_lambda = lam
+            right = mid - 1
+        except RuntimeError:
+            left = mid + 1
+    return feasible_lambda if feasible_lambda is not None else 1
+
+
+def cde_v3(S, _lambda):
+    p = S.shape[0]
+    # start_time = time.time()
+    model = Model(name="CDE")
+
+    W = {
+        (i, j): model.continuous_var(lb=-model.infinity, name=f"w_{i}_{j}")
+        for i in range(p)
+        for j in range(p)
+    }
+
+    obj_expr = model.sum(model.abs(W[(i, j)]) for i in range(p) for j in range(p))
+    model.minimize(obj_expr)
+
+    for i in range(p):
+        for r in range(p):
+            # Compute the dot product: (Sigma[r,:] dot W[:,i])
+            lhs = model.sum(S[r, j] * W[(j, i)] for j in range(p))
+            # Subtract the i-th column of identity: 1 if r == i, else 0.
+            target = 1.0 if r == i else 0.0
+            lhs = lhs - target
+            model.add_constraint(lhs <= _lambda)
+            model.add_constraint(lhs >= -_lambda)
+
+    for i in range(p):
+        for j in range(i + 1, p):
+            model.add_constraint(W[(i, j)] == W[(j, i)])
+
+    for i in range(p):
+        model.add_constraint(W[(i, i)] == 1)
+
+    solution = model.solve()
+    # print("--- %s seconds ---" % (time.time() - start_time))
+    if solution is None:
+        model.clear()
+        raise RuntimeError("No feasible solution found for column.")
+
+    W_est = np.zeros((p, p))
+    for i in range(p):
+        for j in range(p):
+            W_est[i, j] = solution.get_value(W[(i, j)])
+
+    return W_est
+
+
 def generate_omega_model1(p):
     Omega = np.zeros((p, p))
     for i in range(p):
@@ -340,14 +403,7 @@ if __name__ == "__main__":
         results = {}
         lambda_list = [i / 20 for i in range(20)]
 
-        # for p, n in [(20, 50), (40, 50), (60, 50), (80, 50)]:
-        # for p, n in [(20, 50), (20, 35), (20, 20), (20, 10)]:
-        for p, n in [
-            # (20, 50),
-            (20, 35),
-            (20, 20),
-            (20, 10)
-        ]:
+        for p, n in [(20, 50), (40, 50), (60, 50), (80, 50)]:
             condition_key = f"p_{p}_n_{n}"
             results[condition_key] = {}
             np.random.seed(123)
@@ -355,10 +411,9 @@ if __name__ == "__main__":
             I = np.eye(p)
             for model_name, generate_omega in [
                 ("Model 1", generate_omega_model1),
-                # ("Model 2", generate_omega_model2),
+                ("Model 2", generate_omega_model2),
             ]:
-                # print(f"p = {p}, {model_name}")
-                print(f"n = {n}, {model_name}")
+                print(f"p = {p}, {model_name}")
                 stored_Omega = {}
                 for count in range(100):
                     print(f"count = {count}")
@@ -368,7 +423,7 @@ if __name__ == "__main__":
                     S = np.cov(synthetic_data, rowvar=False)
                     lambda_errors = {}
                     for _lambda in lambda_list:
-                        cde_v1_err, cde_v2_err, clime_err = [], [], []
+                        cde_v1_err, cde_v2_err, cde_v3_err, clime_err = [], [], [], []
                         kf = KFold(n_splits=5, shuffle=True)
                         fold = 1
                         for train_index, test_index in kf.split(synthetic_data):
@@ -388,10 +443,18 @@ if __name__ == "__main__":
                             _lambda_scaled_cde_v2 = lambda_min_cde_v2 + (
                                 (1 - lambda_min_cde_v2) * _lambda
                             )
-                            # print(f"CDE V2 Processing {_lambda}")
                             est_Omega_cde_v2 = cde_v2(S_train, _lambda_scaled_cde_v2)
                             cde_v2_err.append(
                                 np.sum(np.abs(est_Omega_cde_v2 @ S_test - I))
+                            )
+
+                            lambda_min_cde_v3 = find_lambda_min_cde_v3(S_train)
+                            _lambda_scaled_cde_v3 = lambda_min_cde_v3 + (
+                                (1 - lambda_min_cde_v3) * _lambda
+                            )
+                            est_Omega_cde_v3 = cde_v3(S_train, _lambda_scaled_cde_v3)
+                            cde_v3_err.append(
+                                np.sum(np.abs(est_Omega_cde_v3 @ S_test - I))
                             )
 
                             est_Omega_clime = clime(S_train, _lambda)
@@ -404,31 +467,42 @@ if __name__ == "__main__":
                         else:
                             cde_v1_err_final = sum(cde_v1_err) / len(cde_v1_err)
                             cde_v2_err_final = sum(cde_v2_err) / len(cde_v2_err)
+                            cde_v3_err_final = sum(cde_v3_err) / len(cde_v3_err)
                             clime_err_final = sum(clime_err) / len(clime_err)
                             if _lambda not in lambda_errors:
                                 lambda_errors[_lambda] = {}
                             lambda_errors[_lambda]["cde_v1"] = cde_v1_err_final
                             lambda_errors[_lambda]["cde_v2"] = cde_v2_err_final
+                            lambda_errors[_lambda]["cde_v3"] = cde_v3_err_final
                             lambda_errors[_lambda]["clime"] = clime_err_final
 
                     else:
-                        best_lambda_cde_v1, best_lambda_cde_v2, best_lambda_clime = (
+                        best_lambda_cde_v1, best_lambda_cde_v2, best_lambda_cde_v3, best_lambda_clime = (
+                            None,
                             None,
                             None,
                             None,
                         )
-                        error_cde_v1, error_cde_v2, error_clime = None, None, None
+                        error_cde_v1, error_cde_v2, error_cde_v3, error_clime = None, None, None, None
                         for i in lambda_errors.keys():
                             if (error_cde_v1 is None) or (
                                 lambda_errors[i]["cde_v1"] < error_cde_v1
                             ):
                                 error_cde_v1 = lambda_errors[i]["cde_v1"]
                                 best_lambda_cde_v1 = i
+
                             if (error_cde_v2 is None) or (
                                 lambda_errors[i]["cde_v2"] < error_cde_v2
                             ):
                                 error_cde_v2 = lambda_errors[i]["cde_v2"]
                                 best_lambda_cde_v2 = i
+
+                            if (error_cde_v3 is None) or (
+                                lambda_errors[i]["cde_v3"] < error_cde_v3
+                            ):
+                                error_cde_v3 = lambda_errors[i]["cde_v3"]
+                                best_lambda_cde_v3 = i
+
                             if (error_clime is None) or (
                                 lambda_errors[i]["clime"] < error_clime
                             ):
@@ -441,8 +515,13 @@ if __name__ == "__main__":
                     _lambda_scaled_cde_v2 = lambda_min_cde_v2 + (
                         (1 - lambda_min_cde_v2) * best_lambda_cde_v2
                     )
-                    # print(f"CDE V2 Processing {best_lambda_cde_v2}")
                     est_Omega_cde_v2 = cde_v2(S, _lambda_scaled_cde_v2)
+
+                    lambda_min_cde_v3 = find_lambda_min_cde_v3(S)
+                    _lambda_scaled_cde_v3 = lambda_min_cde_v3 + (
+                        (1 - lambda_min_cde_v3) * best_lambda_cde_v3
+                    )
+                    est_Omega_cde_v3 = cde_v3(S, _lambda_scaled_cde_v3)
 
                     est_Omega_clime = clime(S, best_lambda_clime)
 
