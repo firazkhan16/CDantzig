@@ -155,9 +155,7 @@ def cde_column_v1(S, e_i, _lambda, lambda_max, lambda_min, fixed_values=None):
 def cde_v1(S, _lambda):
     p = S.shape[0]
     Omega_hat = np.zeros((p, p), dtype=float)
-    # print(f"CDE V1 Processing {_lambda} ")
     for i in range(p):
-        # print(f"CDE Processing Column {i + 1}/{p}")
         e_i = np.zeros(p)
         e_i[i] = 1.0
 
@@ -182,9 +180,7 @@ def cde_v1(S, _lambda):
 def clime(S, _lambda):
     p = S.shape[0]
     Omega_hat = np.zeros((p, p), dtype=float)
-    # print(f"CLIME Processing {_lambda} ")
     for i in range(p):
-        # print(f"CLIME Processing Column {i + 1}/{p}")
         e_i = np.zeros(p)
         e_i[i] = 1.0
 
@@ -267,6 +263,72 @@ def cde_v2(S, _lambda):
             W_est[i, j] = solution.get_value(W[(i, j)])
 
     return W_est
+
+
+def find_lambda_max_cde_v3(S, p, factor):
+    model = Model("lp1")
+    model.parameters.read.scale = -1
+    model.parameters.lpmethod = 4
+
+    W = {(i, j): model.continuous_var(lb=-model.infinity, name=f"w_{i}_{j}")
+         for i in range(p) for j in range(p)}
+
+    obj_expr = model.sum(model.abs(W[(i, j)]) for i in range(p) for j in range(p))
+    model.minimize(obj_expr)
+
+    for i in range(p):
+        for j in range(i + 1, p):
+            model.add_constraint(W[(i, j)] == W[(j, i)])
+
+    for i in range(p):
+        model.add_constraint(W[(i, i)] == 1)
+
+    solution = model.solve()
+    if solution is None or model.solve_status.value != 2:
+        model.clear()
+        raise Exception("Infeasible lp1: Could not find a feasible solution to the baseline problem.")
+
+    lp1_norm = solution.get_objective_value()
+    model.clear()
+
+    model = Model("lp2")
+    model.parameters.read.scale = -1
+    model.parameters.lpmethod = 4
+
+    W = {(i, j): model.continuous_var(lb=-model.infinity, name=f"w_{i}_{j}")
+         for i in range(p) for j in range(p)}
+    lambda_var = model.continuous_var(name="lambda")
+
+    model.minimize(lambda_var)
+
+    for i in range(p):
+        for r in range(p):
+            lhs = model.sum(S[r, j] * W[(j, i)] for j in range(p))
+            target = 1.0 if r == i else 0.0
+            lhs = lhs - target
+            model.add_constraint(lhs <= lambda_var)
+            model.add_constraint(lhs >= -lambda_var)
+
+    for i in range(p):
+        for j in range(i + 1, p):
+            model.add_constraint(W[(i, j)] == W[(j, i)])
+
+    for i in range(p):
+        model.add_constraint(W[(i, i)] == 1)
+
+    # Constraint: sum_{i,j} abs(W[i,j]) must equal the lp1_norm from LP1.
+    expr = model.sum(model.abs(W[(i, j)]) for i in range(p) for j in range(p))
+    model.add_constraint(expr == lp1_norm)
+
+    solution = model.solve()
+    if solution is None or model.solve_status.value != 2:
+        model.clear()
+        raise Exception("Infeasible lp2: Could not find a feasible lambda.")
+
+    lambda_max = solution.get_value(lambda_var)
+    new_factor = (1 / lambda_max * factor) if lambda_max != 0 else factor
+    model.clear()
+    return lambda_max
 
 
 def find_lambda_min_cde_v3(S):
@@ -401,9 +463,14 @@ def compute_tpr_fpr(true_Omega, est_Omega):
 if __name__ == "__main__":
     try:
         results = {}
-        lambda_list = [i / 20 for i in range(20)]
+        lambda_list = [i / 20 for i in range(17)]
 
-        for p, n in [(20, 50), (40, 50), (60, 50), (80, 50)]:
+        for p, n in [
+            (20, 50),
+            # (40, 50),
+            # (60, 50),
+            # (80, 50)
+        ]:
             condition_key = f"p_{p}_n_{n}"
             results[condition_key] = {}
             np.random.seed(123)
@@ -436,8 +503,8 @@ if __name__ == "__main__":
 
                             est_Omega_cde_v1 = cde_v1(S_train, _lambda)
                             cde_v1_err.append(
-                                np.sum(np.abs(est_Omega_cde_v1 @ S_test - I))
-                            )
+                                np.trace(est_Omega_cde_v1 @ S_test) - np.log(np.linalg.det(est_Omega_cde_v1))
+                            ) if np.linalg.det(est_Omega_cde_v1) > 0 else cde_v1_err.append(1e99)
 
                             lambda_min_cde_v2 = find_lambda_min_cde_v2(S_train)
                             _lambda_scaled_cde_v2 = lambda_min_cde_v2 + (
@@ -445,22 +512,23 @@ if __name__ == "__main__":
                             )
                             est_Omega_cde_v2 = cde_v2(S_train, _lambda_scaled_cde_v2)
                             cde_v2_err.append(
-                                np.sum(np.abs(est_Omega_cde_v2 @ S_test - I))
-                            )
+                                np.trace(est_Omega_cde_v2 @ S_test) - np.log(np.linalg.det(est_Omega_cde_v2))
+                            ) if np.linalg.det(est_Omega_cde_v2) > 0 else cde_v2_err.append(1e99)
 
                             lambda_min_cde_v3 = find_lambda_min_cde_v3(S_train)
+                            lambda_max_cde_v3 = find_lambda_max_cde_v3(S_train,p,1)
                             _lambda_scaled_cde_v3 = lambda_min_cde_v3 + (
-                                (1 - lambda_min_cde_v3) * _lambda
+                                (lambda_max_cde_v3 - lambda_min_cde_v3) * _lambda
                             )
                             est_Omega_cde_v3 = cde_v3(S_train, _lambda_scaled_cde_v3)
                             cde_v3_err.append(
-                                np.sum(np.abs(est_Omega_cde_v3 @ S_test - I))
-                            )
+                                np.trace(est_Omega_cde_v3 @ S_test) - np.log(np.linalg.det(est_Omega_cde_v3))
+                            ) if np.linalg.det(est_Omega_cde_v3) > 0 else cde_v3_err.append(1e99)
 
                             est_Omega_clime = clime(S_train, _lambda)
                             clime_err.append(
-                                np.sum(np.abs(est_Omega_clime @ S_test - I))
-                            )
+                                np.trace(est_Omega_clime @ S_test) - np.log(np.linalg.det(est_Omega_clime))
+                            ) if np.linalg.det(est_Omega_clime) > 0 else clime_err.append(1e99)
 
                             fold +=1
 
@@ -518,8 +586,9 @@ if __name__ == "__main__":
                     est_Omega_cde_v2 = cde_v2(S, _lambda_scaled_cde_v2)
 
                     lambda_min_cde_v3 = find_lambda_min_cde_v3(S)
+                    lambda_max_cde_v3 = find_lambda_max_cde_v3(S, p, 1)
                     _lambda_scaled_cde_v3 = lambda_min_cde_v3 + (
-                        (1 - lambda_min_cde_v3) * best_lambda_cde_v3
+                        (lambda_max_cde_v3 - lambda_min_cde_v3) * best_lambda_cde_v3
                     )
                     est_Omega_cde_v3 = cde_v3(S, _lambda_scaled_cde_v3)
 
@@ -528,18 +597,19 @@ if __name__ == "__main__":
                     stored_Omega[count] = {
                         "cde_v1": est_Omega_cde_v1,
                         "cde_v2": est_Omega_cde_v2,
+                        "cde_v3": est_Omega_cde_v3,
                         "clime": est_Omega_clime,
                         "true": true_Omega,
                     }
                     print("--- %s seconds ---" % (time.time() - start_time))
-                    np.savez(f"Omega_model_1_{n}.npz", results=stored_Omega)
+                    np.savez(f"omega_{model_name}_{p}.npz", results=stored_Omega)
 
                 results[condition_key][model_name] = stored_Omega
-                np.savez("Checkpoint_model_1.npz", results=results)
+                np.savez(f"checkpoint_{model_name}_{p}", results=results)
 
-            np.savez(f"results_model_1_n_is_{n}.npz", results=results)
+            np.savez(f"results_{model_name}_{p}.npz", results=results)
 
-        np.savez(f"results_model_1.npz", results=results)
+        np.savez(f"results.npz", results=results)
 
     except Exception as e:
         print(e)
