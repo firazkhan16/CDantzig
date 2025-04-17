@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.stats import multivariate_normal
 from docplex.mp.model import Model
+from sklearn.model_selection import KFold
 from sklearn.model_selection import train_test_split
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
@@ -8,7 +9,6 @@ from numpy.linalg import eigvals
 import pandas as pd
 import requests
 import time
-from sklearn.model_selection import KFold
 
 
 
@@ -463,7 +463,8 @@ def compute_tpr_fpr(true_Omega, est_Omega):
 if __name__ == "__main__":
     try:
         results = {}
-        lambda_list = [i / 20 for i in range(17)]
+        # lambda_list = [i / 20 for i in range(17)]
+        lambda_list = [i / 20 for i in range(7)]
 
         for p, n in [
             (20, 50),
@@ -473,7 +474,6 @@ if __name__ == "__main__":
         ]:
             condition_key = f"p_{p}_n_{n}"
             results[condition_key] = {}
-            np.random.seed(123)
 
             I = np.eye(p)
             for model_name, generate_omega in [
@@ -484,6 +484,7 @@ if __name__ == "__main__":
                 stored_Omega = {}
                 for count in range(100):
                     print(f"count = {count}")
+                    np.random.seed(count + 1)
                     start_time = time.time()
                     true_Omega = generate_omega(p)
                     synthetic_data = generate_synthetic_data(true_Omega, n)
@@ -491,7 +492,7 @@ if __name__ == "__main__":
                     lambda_errors = {}
                     for _lambda in lambda_list:
                         cde_v1_err, cde_v2_err, cde_v3_err, clime_err = [], [], [], []
-                        kf = KFold(n_splits=5, shuffle=True)
+                        kf = KFold(n_splits=5, shuffle=True, random_state=count + 1)
                         fold = 1
                         for train_index, test_index in kf.split(synthetic_data):
                             # print(f"Fold = {fold}")
@@ -647,7 +648,7 @@ if __name__ == "__main__":
         # For each model in the condition:
         for model_name, sim_dict in models.items():
             # Define which methods we have.
-            methods = ["cde_v1", "cde_v2", "clime"]
+            methods = ["cde_v1", "cde_v2", "cde_v3", "clime"]
             # Create a container to collect metrics across simulation counts for each method.
             aggregated = {method: {
                 "positive_definite": [],
