@@ -463,14 +463,13 @@ def compute_tpr_fpr(true_Omega, est_Omega):
 if __name__ == "__main__":
     try:
         results = {}
-        # lambda_list = [i / 20 for i in range(17)]
-        lambda_list = [i / 20 for i in range(7)]
+        lambda_list = [i / 20 for i in range(17)]
 
         for p, n in [
             (20, 50),
-            # (40, 50),
-            # (60, 50),
-            # (80, 50)
+            (20, 35),
+            (20, 20),
+            (20, 10),
         ]:
             condition_key = f"p_{p}_n_{n}"
             results[condition_key] = {}
