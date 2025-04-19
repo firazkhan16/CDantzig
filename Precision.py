@@ -11,7 +11,6 @@ import requests
 import time
 
 
-
 def find_lambda_max_cde_v1(S, e_i, p, factor, fixed_values=None):
     model = Model("lp1")
     model.parameters.read.scale = -1
@@ -270,8 +269,11 @@ def find_lambda_max_cde_v3(S, p, factor):
     model.parameters.read.scale = -1
     model.parameters.lpmethod = 4
 
-    W = {(i, j): model.continuous_var(lb=-model.infinity, name=f"w_{i}_{j}")
-         for i in range(p) for j in range(p)}
+    W = {
+        (i, j): model.continuous_var(lb=-model.infinity, name=f"w_{i}_{j}")
+        for i in range(p)
+        for j in range(p)
+    }
 
     obj_expr = model.sum(model.abs(W[(i, j)]) for i in range(p) for j in range(p))
     model.minimize(obj_expr)
@@ -286,7 +288,9 @@ def find_lambda_max_cde_v3(S, p, factor):
     solution = model.solve()
     if solution is None or model.solve_status.value != 2:
         model.clear()
-        raise Exception("Infeasible lp1: Could not find a feasible solution to the baseline problem.")
+        raise Exception(
+            "Infeasible lp1: Could not find a feasible solution to the baseline problem."
+        )
 
     lp1_norm = solution.get_objective_value()
     model.clear()
@@ -295,8 +299,11 @@ def find_lambda_max_cde_v3(S, p, factor):
     model.parameters.read.scale = -1
     model.parameters.lpmethod = 4
 
-    W = {(i, j): model.continuous_var(lb=-model.infinity, name=f"w_{i}_{j}")
-         for i in range(p) for j in range(p)}
+    W = {
+        (i, j): model.continuous_var(lb=-model.infinity, name=f"w_{i}_{j}")
+        for i in range(p)
+        for j in range(p)
+    }
     lambda_var = model.continuous_var(name="lambda")
 
     model.minimize(lambda_var)
@@ -503,8 +510,11 @@ if __name__ == "__main__":
 
                             est_Omega_cde_v1 = cde_v1(S_train, _lambda)
                             cde_v1_err.append(
-                                np.trace(est_Omega_cde_v1 @ S_test) - np.log(np.linalg.det(est_Omega_cde_v1))
-                            ) if np.linalg.det(est_Omega_cde_v1) > 0 else cde_v1_err.append(1e99)
+                                np.trace(est_Omega_cde_v1 @ S_test)
+                                - np.log(np.linalg.det(est_Omega_cde_v1))
+                            ) if np.linalg.det(
+                                est_Omega_cde_v1
+                            ) > 0 else cde_v1_err.append(1e99)
 
                             lambda_min_cde_v2 = find_lambda_min_cde_v2(S_train)
                             _lambda_scaled_cde_v2 = lambda_min_cde_v2 + (
@@ -512,25 +522,34 @@ if __name__ == "__main__":
                             )
                             est_Omega_cde_v2 = cde_v2(S_train, _lambda_scaled_cde_v2)
                             cde_v2_err.append(
-                                np.trace(est_Omega_cde_v2 @ S_test) - np.log(np.linalg.det(est_Omega_cde_v2))
-                            ) if np.linalg.det(est_Omega_cde_v2) > 0 else cde_v2_err.append(1e99)
+                                np.trace(est_Omega_cde_v2 @ S_test)
+                                - np.log(np.linalg.det(est_Omega_cde_v2))
+                            ) if np.linalg.det(
+                                est_Omega_cde_v2
+                            ) > 0 else cde_v2_err.append(1e99)
 
                             lambda_min_cde_v3 = find_lambda_min_cde_v3(S_train)
-                            lambda_max_cde_v3 = find_lambda_max_cde_v3(S_train,p,1)
+                            lambda_max_cde_v3 = find_lambda_max_cde_v3(S_train, p, 1)
                             _lambda_scaled_cde_v3 = lambda_min_cde_v3 + (
                                 (lambda_max_cde_v3 - lambda_min_cde_v3) * _lambda
                             )
                             est_Omega_cde_v3 = cde_v3(S_train, _lambda_scaled_cde_v3)
                             cde_v3_err.append(
-                                np.trace(est_Omega_cde_v3 @ S_test) - np.log(np.linalg.det(est_Omega_cde_v3))
-                            ) if np.linalg.det(est_Omega_cde_v3) > 0 else cde_v3_err.append(1e99)
+                                np.trace(est_Omega_cde_v3 @ S_test)
+                                - np.log(np.linalg.det(est_Omega_cde_v3))
+                            ) if np.linalg.det(
+                                est_Omega_cde_v3
+                            ) > 0 else cde_v3_err.append(1e99)
 
                             est_Omega_clime = clime(S_train, _lambda)
                             clime_err.append(
-                                np.trace(est_Omega_clime @ S_test) - np.log(np.linalg.det(est_Omega_clime))
-                            ) if np.linalg.det(est_Omega_clime) > 0 else clime_err.append(1e99)
+                                np.trace(est_Omega_clime @ S_test)
+                                - np.log(np.linalg.det(est_Omega_clime))
+                            ) if np.linalg.det(
+                                est_Omega_clime
+                            ) > 0 else clime_err.append(1e99)
 
-                            fold +=1
+                            fold += 1
 
                         else:
                             cde_v1_err_final = sum(cde_v1_err) / len(cde_v1_err)
@@ -545,13 +564,23 @@ if __name__ == "__main__":
                             lambda_errors[_lambda]["clime"] = clime_err_final
 
                     else:
-                        best_lambda_cde_v1, best_lambda_cde_v2, best_lambda_cde_v3, best_lambda_clime = (
+                        (
+                            best_lambda_cde_v1,
+                            best_lambda_cde_v2,
+                            best_lambda_cde_v3,
+                            best_lambda_clime,
+                        ) = (
                             None,
                             None,
                             None,
                             None,
                         )
-                        error_cde_v1, error_cde_v2, error_cde_v3, error_clime = None, None, None, None
+                        error_cde_v1, error_cde_v2, error_cde_v3, error_clime = (
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
                         for i in lambda_errors.keys():
                             if (error_cde_v1 is None) or (
                                 lambda_errors[i]["cde_v1"] < error_cde_v1
@@ -605,9 +634,7 @@ if __name__ == "__main__":
                     np.savez(f"omega_{model_name}_{p}.npz", results=stored_Omega)
 
                 results[condition_key][model_name] = stored_Omega
-                np.savez(f"checkpoint_{model_name}_{p}", results=results)
-
-            np.savez(f"results_{model_name}_{p}.npz", results=results)
+            np.savez(f"final_results_{model_name}_p_{p}_n_{n}.npz", results=results)
 
         np.savez(f"results.npz", results=results)
 
@@ -649,15 +676,18 @@ if __name__ == "__main__":
             # Define which methods we have.
             methods = ["cde_v1", "cde_v2", "cde_v3", "clime"]
             # Create a container to collect metrics across simulation counts for each method.
-            aggregated = {method: {
-                "positive_definite": [],
-                "frobenius_error": [],
-                "l1_error": [],
-                "relative_frobenius_error": [],
-                "relative_l1_error": [],
-                "TPR": [],
-                "FPR": []
-            } for method in methods}
+            aggregated = {
+                method: {
+                    "positive_definite": [],
+                    "frobenius_error": [],
+                    "l1_error": [],
+                    "relative_frobenius_error": [],
+                    "relative_l1_error": [],
+                    "TPR": [],
+                    "FPR": [],
+                }
+                for method in methods
+            }
 
             # Loop over simulation counts.
             for count, simulation in sim_dict.items():
@@ -665,16 +695,23 @@ if __name__ == "__main__":
                 for method in methods:
                     est_Omega = simulation[method]
                     # Check for positive definiteness (convert boolean to 1/0).
-                    pd_test = (np.sum(np.abs(np.linalg.eigvals(est_Omega)) <= 0) == 0)
+                    pd_test = np.sum(np.abs(np.linalg.eigvals(est_Omega)) <= 0) == 0
                     # Compute TPR and FPR.
                     tpr, fpr = compute_tpr_fpr(true_Omega, est_Omega)
                     # Append the metrics for this simulation.
                     aggregated[method]["positive_definite"].append(1 if pd_test else 0)
-                    aggregated[method]["frobenius_error"].append(frobenius_norm_error(true_Omega, est_Omega))
-                    aggregated[method]["l1_error"].append(l1_norm_error(true_Omega, est_Omega))
+                    aggregated[method]["frobenius_error"].append(
+                        frobenius_norm_error(true_Omega, est_Omega)
+                    )
+                    aggregated[method]["l1_error"].append(
+                        l1_norm_error(true_Omega, est_Omega)
+                    )
                     aggregated[method]["relative_frobenius_error"].append(
-                        relative_frobenius_norm_error(true_Omega, est_Omega))
-                    aggregated[method]["relative_l1_error"].append(relative_l1_norm_error(true_Omega, est_Omega))
+                        relative_frobenius_norm_error(true_Omega, est_Omega)
+                    )
+                    aggregated[method]["relative_l1_error"].append(
+                        relative_l1_norm_error(true_Omega, est_Omega)
+                    )
                     aggregated[method]["TPR"].append(tpr)
                     aggregated[method]["FPR"].append(fpr)
 
@@ -683,25 +720,29 @@ if __name__ == "__main__":
                 avg_positive_definite = np.mean(aggregated[method]["positive_definite"])
                 avg_frobenius_error = np.mean(aggregated[method]["frobenius_error"])
                 avg_l1_error = np.mean(aggregated[method]["l1_error"])
-                avg_relative_frobenius_error = np.mean(aggregated[method]["relative_frobenius_error"])
+                avg_relative_frobenius_error = np.mean(
+                    aggregated[method]["relative_frobenius_error"]
+                )
                 avg_relative_l1_error = np.mean(aggregated[method]["relative_l1_error"])
                 avg_TPR = np.mean(aggregated[method]["TPR"])
                 avg_FPR = np.mean(aggregated[method]["FPR"])
 
                 # Append a row for this combination.
-                data.append({
-                    "model": model_name,
-                    "method": method,
-                    "p": p_val,
-                    "n": n_val,
-                    "positive_definite": avg_positive_definite,
-                    "frobenius_error": avg_frobenius_error,
-                    "l1_error": avg_l1_error,
-                    "relative_frobenius_error": avg_relative_frobenius_error,
-                    "relative_l1_error": avg_relative_l1_error,
-                    "TPR": avg_TPR,
-                    "FPR": avg_FPR,
-                })
+                data.append(
+                    {
+                        "model": model_name,
+                        "method": method,
+                        "p": p_val,
+                        "n": n_val,
+                        "positive_definite": avg_positive_definite,
+                        "frobenius_error": avg_frobenius_error,
+                        "l1_error": avg_l1_error,
+                        "relative_frobenius_error": avg_relative_frobenius_error,
+                        "relative_l1_error": avg_relative_l1_error,
+                        "TPR": avg_TPR,
+                        "FPR": avg_FPR,
+                    }
+                )
 
     df_results = pd.DataFrame(data)
 
