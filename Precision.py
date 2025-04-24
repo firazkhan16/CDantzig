@@ -470,7 +470,7 @@ def compute_tpr_fpr(true_Omega, est_Omega):
 if __name__ == "__main__":
     try:
         results = {}
-        lambda_list = [i / 20 for i in range(17)]
+        lambda_list = [i / 20 for i in range(9)]
 
         for p, n in [
             (20, 50),
@@ -638,31 +638,10 @@ if __name__ == "__main__":
                 results[condition_key][model_name] = stored_Omega
             np.savez(f"final_results_{model_name}_p_{p}_n_{n}.npz", results=results)
 
-        np.savez(f"results.npz", results=results)
-
     except Exception as e:
         print(e)
-        # response = requests.post(
-        #     f"https://ntfy.sh/firaz_python",
-        #     data="❌ Script Failed! Please check for errors.".encode("utf-8"),
-        #     headers={
-        #         "Title": "Script Failed".encode("utf-8").decode("latin-1"),
-        #         "Priority": "high",
-        #         "Tags": "cross,fire",
-        #         "Sound": "siren",
-        #     },
-        # )
         raise RuntimeError
     else:
-        # response = requests.post(
-        #     f"https://ntfy.sh/firaz_python",
-        #     data="✅ Script finished running".encode("utf-8"),
-        #     headers={
-        #         "Title": "Script Completed".encode("utf-8").decode("latin-1"),
-        #         "Priority": "high",
-        #         "Tags": "check",
-        #     },
-        # )
         pass
 
     data = []
