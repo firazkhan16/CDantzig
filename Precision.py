@@ -488,11 +488,13 @@ if __name__ == "__main__":
             ]:
                 print(f"p = {p}, {model_name}")
                 stored_Omega = {}
+                # set seed for reproducibility as n and create one true omega for all 100 simulations
+                np.random.seed(n)
+                true_Omega = generate_omega(p)
                 for count in range(100):
                     print(f"count = {count}")
                     np.random.seed(count + 1)
                     start_time = time.time()
-                    true_Omega = generate_omega(p)
                     synthetic_data = generate_synthetic_data(true_Omega, n)
                     S = np.cov(synthetic_data, rowvar=False)
                     lambda_errors = {}
