@@ -2,14 +2,10 @@ import numpy as np
 from scipy.stats import multivariate_normal
 from docplex.mp.model import Model
 from sklearn.model_selection import KFold
-from sklearn.model_selection import train_test_split
-import plotly.graph_objs as go
-from plotly.subplots import make_subplots
-from numpy.linalg import eigvals
 import pandas as pd
-import requests
 import time
-
+from plotly.subplots import make_subplots
+import plotly.graph_objs as go
 
 def find_lambda_max_cde_v1(S, e_i, p, factor, fixed_values=None):
     model = Model("lp1")
@@ -728,3 +724,99 @@ if __name__ == "__main__":
     df_results = pd.DataFrame(data)
 
     print("Done!")
+
+
+def load_results(path):
+    data = np.load(path, allow_pickle=True)
+    if "results" not in data:
+        raise ValueError("Expected an array named 'results' in the npz.")
+    raw = data["results"]
+
+    if isinstance(raw, np.ndarray) and raw.dtype == object and raw.shape == ():
+        raw = raw.item()
+
+    cleaned = {}
+    for run, val in raw.items():
+        if isinstance(val, np.ndarray) and val.dtype == object and val.shape == ():
+            val = val.item()
+        cleaned[run] = val
+
+    sample = next(iter(cleaned.values()))
+    if isinstance(sample, dict) and all(isinstance(k, int) for k in sample):
+        peeled = {}
+        for run_outer, inner in cleaned.items():
+            inner_dict = next(iter(inner.values()))
+            peeled[run_outer] = inner_dict
+        cleaned = peeled
+
+    return cleaned
+
+def zero_frequency_matrix(results, method, threshold=1e-6):
+    runs = sorted(results.keys())
+    p = results[runs[0]][method].shape[0]
+    freq = np.zeros((p, p), float)
+
+    for run in runs:
+        M = results[run][method]
+        freq += (np.abs(M) < threshold).astype(float)
+
+    return freq / len(runs)
+
+def create_model_figure(results, method_labels, threshold=1e-2):
+    methods = ["true", "cde_v1", "cde_v2", "cde_v3", "clime"]
+    fig = make_subplots(
+        rows=1, cols=len(methods),
+        horizontal_spacing=0.02,
+    )
+
+    for col, (m, label) in enumerate(zip(methods, method_labels), start=1):
+        Z = zero_frequency_matrix(results, m, threshold=threshold)
+        fig.add_trace(
+            go.Heatmap(z=Z, zmin=0, zmax=1,
+                       colorscale=[[0, "black"], [1, "white"]],
+                       showscale=False),
+            row=1, col=col
+        )
+        xref = f"x{col if col > 1 else ''} domain"
+        yref = f"y{col if col > 1 else ''} domain"
+
+        titles = {
+            'cde_v3': 'CDE V3',
+            'cde_v2': 'CDE V2',
+            'cde_v1': 'CDE V1',
+            'clime': 'CLIME',
+            'true': 'True',
+        }
+        fig.add_annotation(
+            xref=xref, yref=yref,
+            x=0.5,
+            y=-0.10,
+            text=titles[label],
+            showarrow=False,
+            font=dict(size=14)
+        )
+
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(
+        margin=dict(t=50, b=50),
+        height=425, width=1800
+    )
+    return fig
+
+
+# This part is to load the data from n=10 p=20 for both models and plot frequency of 0s and 1s
+# if __name__ == "__main__":
+#     results1 = load_results("final_results_Model 1_p_20_n_10.npz")
+#     results1 = results1["p_20_n_10"]["Model 1"]
+#
+#     results2 = load_results("final_results_Model 2_p_20_n_10.npz")
+#     results2 = results2["p_20_n_10"]["Model 2"]
+#
+#     method_labels = ["true", "cde_v1", "cde_v2", "cde_v3", "clime"]
+#
+#     fig1 = create_model_figure(results1, method_labels, threshold=1e-2)
+#     fig1.show()
+#
+#     fig2 = create_model_figure(results2, method_labels, threshold=1e-6)
+#     fig2.show()
+
